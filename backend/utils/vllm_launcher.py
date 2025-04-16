@@ -15,13 +15,10 @@ import argparse
 import subprocess
 from typing import List, Dict, Any
 
-# Configure logging for the launcher script itself
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - [Launcher] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger("vllm_launcher")
+# All logs from this module are unified via the root logger in backend/main.py.
+# Do not set up per-module file handlers or basicConfig here.
+import logging
+logger = logging.getLogger()
 
 # --- Import config AFTER setting up logger ---
 try:

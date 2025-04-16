@@ -1,3 +1,5 @@
+# All logs from this module are unified via the root logger in backend/main.py.
+# Do not set up per-module file handlers or basicConfig here.
 import os
 import logging
 from fastapi import APIRouter, HTTPException, status as http_status, Query, Path
