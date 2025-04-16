@@ -184,11 +184,17 @@ print_step "Starting Backend and Frontend Services"
 
 # Start Backend
 print_info "Starting FastAPI backend on port ${BACKEND_PORT}..."
-export VLLM_LOG_DIR="${LOG_DIR}"
-nohup "${VLLM_HOME}/venv/bin/python" -m uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > /dev/null 2>&1 &
+# Redirect stderr to a file to capture startup errors
+BACKEND_STDERR_LOG="/opt/vllm/backend_stderr.log"
+print_info "Redirecting backend startup stderr to ${BACKEND_STDERR_LOG}"
+# Ensure the log directory exists for the stderr log as well
+mkdir -p "$(dirname "$BACKEND_STDERR_LOG")"
+chown "${VLLM_USER}:${VLLM_GROUP}" "$(dirname "$BACKEND_STDERR_LOG")" || print_warning "Could not set ownership for backend stderr log directory"
+
+# Start backend, redirecting stderr
+nohup "${VLLM_HOME}/venv/bin/python" -m uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > /dev/null 2> "$BACKEND_STDERR_LOG" &
 BACKEND_PID=$!
 if [ -d "$VLLM_HOME" ]; then echo $BACKEND_PID > "$BACKEND_PID_FILE"; else print_warning "Cannot write backend PID file, VLLM_HOME not found."; fi
-unset VLLM_LOG_DIR
 sleep 2
 if ps -p $BACKEND_PID > /dev/null; then
    print_success "Backend started successfully (PID: $BACKEND_PID). Logs: ${UNIFIED_LOG_FILE}"
