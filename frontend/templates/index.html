@@ -7,9 +7,10 @@
     <style>
         body { font-family: sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
         .container { max-width: 1000px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        h1, h2, h3 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 25px; }
+        h1 { margin-top: 0; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
+        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; vertical-align: top; }
         th { background-color: #f2f2f2; }
         .status-active { color: green; font-weight: bold; }
         .status-inactive { color: red; font-weight: bold; }
@@ -21,18 +22,23 @@
         .action-button-danger { background-color: #d9534f; }
         .action-button-warning { background-color: #f0ad4e; }
         .action-button-info { background-color: #5bc0de; }
+        .action-button-add { background-color: #777; }
         .action-button-activate { background-color: #337ab7; }
         .action-button:hover { opacity: 0.9; }
-        .action-button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .action-button:disabled { background-color: #ccc; cursor: not-allowed; opacity: 0.6; }
         .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
         .flash-success { background-color: #dff0d8; color: #3c763d; border: 1px solid #d6e9c6; }
         .flash-error { background-color: #f2dede; color: #a94442; border: 1px solid #ebccd1; }
         .monitoring-section { background-color: #eef; padding: 15px; border-radius: 5px; margin-top: 20px; }
-        .monitoring-section h3 { margin-top: 0; }
+        .monitoring-section h3 { margin-top: 0; border-bottom: none; }
         .gpu-stats { margin-bottom: 10px; }
         .system-stats { margin-top: 10px; }
         pre { background-color: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; }
         .active-model { font-weight: bold; color: #337ab7; }
+        .fits-vram { color: green; }
+        .no-fit-vram { color: #aaa; }
+        .model-id-code { font-family: monospace; font-size: 0.9em; color: #555; }
+        .note { font-size: 0.9em; color: #777; }
     </style>
 </head>
 <body>
@@ -95,7 +101,7 @@
                             {{ model.name }}
                             {% if model.name == active_model_key %} <span class="active-model">(Active)</span> {% endif %}
                         </td>
-                        <td>{{ model.model_id }}</td>
+                        <td class="model-id-code">{{ model.model_id }}</td>
                         <td>
                             <span class="status-{{ 'downloaded' if model.downloaded else 'not-downloaded' }}">
                                 {{ 'Downloaded' if model.downloaded else 'Not Downloaded' }}
@@ -114,15 +120,53 @@
                             {% else %}
                                 <button class="action-button action-button-activate" disabled title="Download model first">Activate</button>
                             {% endif %}
-                            <!-- Add Delete button? -->
                         </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         {% else %}
-            <p>No models found in configuration (<code>{{ config_path }}</code>). Add models via API or manually.</p>
+            <p>No models found in configuration (<code>{{ config_path }}</code>). Add models from the popular list below or via API.</p>
         {% endif %}
+
+        <!-- Popular Models -->
+        <h2>Popular Models (Top 10 fitting ~{{ total_vram_gb | round(1) }} GB VRAM)</h2>
+        <p class="note">VRAM estimates are very approximate. Models marked green are *likely* to fit based on parameter count and assumed quantization.</p>
+        {% if popular_models %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Model ID</th>
+                        <th>Est. VRAM (GB)</th>
+                        <th>Gated</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for model in popular_models %}
+                    {% set fits = total_vram_gb > 0 and model.size_gb > 0 and model.size_gb < (total_vram_gb * 0.95) %}
+                    {% set already_configured = model.model_id in configured_model_ids %}
+                    <tr class="{{ 'fits-vram' if fits else 'no-fit-vram' }}">
+                        <td class="model-id-code">{{ model.model_id }}</td>
+                        <td>{{ model.size_gb | round(1) if model.size_gb > 0 else 'N/A' }}</td>
+                        <td>{{ 'Yes' if model.gated else 'No' }}</td>
+                        <td>
+                            {% if already_configured %}
+                                <button class="action-button action-button-add" disabled title="Model already in configuration">Configured</button>
+                            {% else %}
+                                <form action="{{ url_for('handle_add_popular_model', model_id=model.model_id) }}" method="post" style="display: inline;">
+                                    <button type="submit" class="action-button action-button-add">Add to Config</button>
+                                </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>Could not fetch popular models list from the backend, or none fit the available VRAM.</p>
+        {% endif %}
+
 
         <!-- Monitoring Stats -->
         <h2>Monitoring</h2>
@@ -130,7 +174,7 @@
             <div class="monitoring-section">
                 <h3>Live Stats ({{ monitoring_stats.timestamp }})</h3>
                 <div class="gpu-stats">
-                    <h4>GPU Stats</h4>
+                    <h4>GPU Stats (Total VRAM: {{ total_vram_gb | round(1) }} GB)</h4>
                     {% if monitoring_stats.gpu_stats %}
                         {% for gpu in monitoring_stats.gpu_stats %}
                             <p>
