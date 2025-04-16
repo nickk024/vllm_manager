@@ -74,7 +74,18 @@ if [ "$PERFORM_CLEANUP" = true ]; then
     print_info "Attempting to stop running backend/frontend processes..."
     if [ -f "$BACKEND_PID_FILE" ]; then B_PID=$(cat "$BACKEND_PID_FILE"); print_info "Found backend PID file ($BACKEND_PID_FILE) with PID: $B_PID"; if ps -p "$B_PID" > /dev/null; then print_info "Attempting to kill backend process (PID: $B_PID)..."; kill "$B_PID"; sleep 1; if ps -p "$B_PID" > /dev/null; then print_warning "Backend process $B_PID still running, attempting force kill (kill -9)..."; kill -9 "$B_PID" || print_warning "Failed to force kill backend $B_PID."; else print_info "Backend process $B_PID terminated successfully."; fi; else print_info "Backend process $B_PID not found running."; fi; print_info "Removing backend PID file..."; rm -f "$BACKEND_PID_FILE"; else print_info "Backend PID file ($BACKEND_PID_FILE) not found."; fi
     if [ -f "$FRONTEND_PID_FILE" ]; then F_PID=$(cat "$FRONTEND_PID_FILE"); print_info "Found frontend PID file ($FRONTEND_PID_FILE) with PID: $F_PID"; if ps -p "$F_PID" > /dev/null; then print_info "Attempting to kill frontend process (PID: $F_PID)..."; kill "$F_PID"; sleep 1; if ps -p "$F_PID" > /dev/null; then print_warning "Frontend process $F_PID still running, attempting force kill (kill -9)..."; kill -9 "$F_PID" || print_warning "Failed to force kill frontend $F_PID."; else print_info "Frontend process $F_PID terminated successfully."; fi; else print_info "Frontend process $F_PID not found running."; fi; print_info "Removing frontend PID file..."; rm -f "$FRONTEND_PID_FILE"; else print_info "Frontend PID file ($FRONTEND_PID_FILE) not found."; fi
-    print_info "Stopping service ${SERVICE_NAME}..."; systemctl stop "$SERVICE_NAME"; print_info "Disabling service ${SERVICE_NAME}..."; systemctl disable "$SERVICE_NAME"; SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"; if [ -f "$SERVICE_FILE_PATH" ]; then print_info "Removing service file ${SERVICE_FILE_PATH}..."; rm -f "$SERVICE_FILE_PATH" || print_warning "Failed to remove service file."; fi; print_info "Reloading systemd daemon..."; systemctl daemon-reload || print_warning "Failed to reload systemd daemon."
+    # Stop Ray cluster if running
+    print_info "Attempting to stop Ray cluster..."
+    if command -v ray &> /dev/null; then
+        "${VLLM_HOME}/venv/bin/ray" stop || print_warning "Failed to stop Ray cluster. It might not have been running."
+        print_info "Ray stop command executed."
+    else
+        print_warning "Ray command not found, cannot stop cluster."
+    fi
+    # Systemd cleanup (keep for legacy, but it should fail gracefully if service removed)
+    print_info "Stopping service ${SERVICE_NAME}..."; systemctl stop "$SERVICE_NAME" || print_warning "Failed to stop systemd service (might not exist)."
+    print_info "Disabling service ${SERVICE_NAME}..."; systemctl disable "$SERVICE_NAME" || print_warning "Failed to disable systemd service (might not exist)."
+    SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"; if [ -f "$SERVICE_FILE_PATH" ]; then print_info "Removing service file ${SERVICE_FILE_PATH}..."; rm -f "$SERVICE_FILE_PATH" || print_warning "Failed to remove service file."; fi; print_info "Reloading systemd daemon..."; systemctl daemon-reload || print_warning "Failed to reload systemd daemon."
     print_info "Removing installation directory ${VLLM_HOME}..."; rm -rf "$VLLM_HOME" || print_warning "Failed to remove installation directory."
     print_info "Removing log directory ${LOG_DIR}..."; rm -rf "$LOG_DIR" || print_warning "Failed to remove log directory."
     print_success "Cleanup finished."
@@ -162,6 +173,8 @@ fi
 
 # --- Start Ray Cluster Head Node ---
 print_step "Starting Ray Cluster Head Node"
+print_info "Attempting to stop any existing Ray instance..."
+"${VLLM_HOME}/venv/bin/ray" stop || print_warning "Failed to stop existing Ray instance (might not be running)."
 print_info "Starting Ray head node (required for Ray Serve)..."
 "${VLLM_HOME}/venv/bin/ray" start --head --port=6379 || { print_error "Failed to start Ray head node."; exit 1; }
 print_success "Ray head node started."
