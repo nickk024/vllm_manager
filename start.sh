@@ -41,7 +41,6 @@ ask_yes_no() {
 
 # --- Sanity Checks ---
 print_step "Running Sanity Checks"
-# ... (checks remain the same) ...
 if [[ $EUID -ne 0 ]]; then print_error "This script expects to be run as root."; exit 1; fi
 if ! command -v nvidia-smi &> /dev/null; then print_error "NVIDIA drivers not found."; exit 1; fi
 print_info "NVIDIA drivers detected."; nvidia-smi -L
@@ -72,30 +71,49 @@ if [ "$PERFORM_CLEANUP" = true ]; then
     print_step "Performing Cleanup"
 
     # Stop running backend/frontend processes using PID files
+    print_info "Attempting to stop running backend/frontend processes..."
     if [ -f "$BACKEND_PID_FILE" ]; then
         B_PID=$(cat "$BACKEND_PID_FILE")
+        print_info "Found backend PID file ($BACKEND_PID_FILE) with PID: $B_PID"
         if ps -p "$B_PID" > /dev/null; then
-            print_info "Stopping existing backend process (PID: $B_PID)..."
-            kill "$B_PID" || print_warning "Failed to kill backend process $B_PID."
-            sleep 1 # Give it a moment
-            # Force kill if still running
-            if ps -p "$B_PID" > /dev/null; then kill -9 "$B_PID" || print_warning "Failed to force kill backend $B_PID."; fi
+            print_info "Attempting to kill backend process (PID: $B_PID)..."
+            kill "$B_PID"
+            sleep 1
+            if ps -p "$B_PID" > /dev/null; then
+                print_warning "Backend process $B_PID still running, attempting force kill (kill -9)..."
+                kill -9 "$B_PID" || print_warning "Failed to force kill backend $B_PID."
+            else
+                print_info "Backend process $B_PID terminated successfully."
+            fi
         else
-            print_info "Backend PID file found, but process $B_PID not running."
+            print_info "Backend process $B_PID not found running."
         fi
+        print_info "Removing backend PID file..."
         rm -f "$BACKEND_PID_FILE"
+    else
+        print_info "Backend PID file ($BACKEND_PID_FILE) not found."
     fi
+
      if [ -f "$FRONTEND_PID_FILE" ]; then
         F_PID=$(cat "$FRONTEND_PID_FILE")
+        print_info "Found frontend PID file ($FRONTEND_PID_FILE) with PID: $F_PID"
         if ps -p "$F_PID" > /dev/null; then
-            print_info "Stopping existing frontend process (PID: $F_PID)..."
-            kill "$F_PID" || print_warning "Failed to kill frontend process $F_PID."
+            print_info "Attempting to kill frontend process (PID: $F_PID)..."
+            kill "$F_PID"
             sleep 1
-            if ps -p "$F_PID" > /dev/null; then kill -9 "$F_PID" || print_warning "Failed to force kill frontend $F_PID."; fi
+            if ps -p "$F_PID" > /dev/null; then
+                print_warning "Frontend process $F_PID still running, attempting force kill (kill -9)..."
+                kill -9 "$F_PID" || print_warning "Failed to force kill frontend $F_PID."
+            else
+                 print_info "Frontend process $F_PID terminated successfully."
+            fi
         else
-            print_info "Frontend PID file found, but process $F_PID not running."
+            print_info "Frontend process $F_PID not found running."
         fi
+        print_info "Removing frontend PID file..."
         rm -f "$FRONTEND_PID_FILE"
+    else
+        print_info "Frontend PID file ($FRONTEND_PID_FILE) not found."
     fi
 
     # Stop and remove systemd service
@@ -215,7 +233,7 @@ print_info "Starting FastAPI backend on port ${BACKEND_PORT}..."
 export VLLM_LOG_DIR="${LOG_DIR}"
 nohup "${VLLM_HOME}/venv/bin/python" -m uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > "${LOG_DIR}/backend_stdout.log" 2>&1 &
 BACKEND_PID=$!
-# Write PID to file (ensure VLLM_HOME exists)
+# Write PID to file (ensure VLLM_HOME exists - should exist here)
 if [ -d "$VLLM_HOME" ]; then echo $BACKEND_PID > "$BACKEND_PID_FILE"; else print_warning "Cannot write backend PID file, VLLM_HOME not found."; fi
 unset VLLM_LOG_DIR
 sleep 2
