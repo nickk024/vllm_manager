@@ -10,10 +10,14 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 # --- Logging Configuration ---
+# Use VLLM_LOG_DIR from environment variable set by start.sh
+# Fallback to a 'logs' directory relative to this script's location if env var not set
 LOG_DIR_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "logs")
 LOG_DIR = os.environ.get("VLLM_LOG_DIR", LOG_DIR_DEFAULT)
-LOG_FILE = os.path.join(LOG_DIR, "vllm_frontend.log")
+# Unified log file name
+UNIFIED_LOG_FILE = os.path.join(LOG_DIR, "vllm_manager.log")
 LOG_LEVEL = logging.DEBUG
+
 log_dir_valid = False
 try:
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -21,36 +25,47 @@ try:
     print(f"[Flask INFO] Logging directory set to: {LOG_DIR}")
 except OSError as e:
      print(f"[Flask ERROR] Could not create/access log directory: {LOG_DIR}. Error: {e}", file=sys.stderr)
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Flask] %(message)s') # Added [Flask] prefix
+
+# Configure Flask's built-in logger
 app.logger.setLevel(LOG_LEVEL)
-for handler in app.logger.handlers[:]: app.logger.removeHandler(handler)
+for handler in app.logger.handlers[:]: app.logger.removeHandler(handler) # Clear default handlers
+
+# Add console handler
 console_handler = logging.StreamHandler(sys.stderr)
-console_handler.setLevel(logging.INFO)
+console_handler.setLevel(logging.INFO) # Keep console INFO
 console_handler.setFormatter(formatter)
 app.logger.addHandler(console_handler)
+
+# Add rotating file handler (to unified file) only if log dir is valid
 if log_dir_valid:
     try:
-        file_handler = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=3)
+        # Use same file name as backend
+        file_handler = logging.handlers.RotatingFileHandler(
+            UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5 # Shared file, maybe larger size
+        )
         file_handler.setLevel(LOG_LEVEL)
         file_handler.setFormatter(formatter)
         app.logger.addHandler(file_handler)
-        app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {LOG_FILE}) ---")
+        app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_FILE}) ---")
     except Exception as e:
-         print(f"[Flask ERROR] Failed to create file log handler for {LOG_FILE}. Error: {e}", file=sys.stderr)
-         app.logger.error(f"Failed to create file log handler for {LOG_FILE}. Error: {e}")
+         print(f"[Flask ERROR] Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}", file=sys.stderr)
+         app.logger.error(f"Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}")
 else:
      app.logger.warning("--- Flask Logging configured (Console only) ---")
 # --- End Logging Configuration ---
 
+
 BACKEND_API_URL = os.environ.get("VLLM_BACKEND_URL", "http://localhost:8080/api/v1")
 
 def call_backend(method: str, endpoint: str, params: dict = None, json_data=None) -> dict | None:
-    """Helper function to call the backend API. Added params for GET requests."""
+    """Helper function to call the backend API."""
     url = f"{BACKEND_API_URL}{endpoint}"
     action_description = f"{method} {endpoint}"
     try:
         app.logger.info(f"Calling backend: {action_description} with params: {params}, data: {json_data}")
-        response = requests.request(method, url, params=params, json=json_data, timeout=30) # Pass params for GET
+        response = requests.request(method, url, params=params, json=json_data, timeout=30)
         response.raise_for_status()
         if response.status_code == 204:
              app.logger.info(f"Backend call successful ({action_description}): Status 204 No Content")
@@ -59,15 +74,15 @@ def call_backend(method: str, endpoint: str, params: dict = None, json_data=None
             response_json = response.json()
             app.logger.info(f"Backend call successful ({action_description}): {response_json}")
             # Check if it's a list (like from /models/popular) or a dict
-            if isinstance(response_json, list):
-                 # If it's a list, wrap it for consistency downstream if needed, or handle directly
-                 return {"status": "ok", "message": "List received.", "data": response_json}
-            elif 'status' not in response_json or 'message' not in response_json:
-                 return {"status": "ok", "message": "Received successful but non-standard response.", "details": response_json}
+            # Let's simplify: assume successful non-204 responses are JSON dicts or lists
+            # The calling code needs to handle the structure
             return response_json
         except requests.exceptions.JSONDecodeError:
              app.logger.warning(f"Backend call successful ({action_description}) but response was not JSON: {response.text[:100]}...")
-             return {"status": "ok", "message": "Action successful (non-JSON response received).", "details": response.text}
+             # Return None or an error structure if JSON was expected but not received?
+             # For now, return None to indicate unexpected content format
+             flash(f"Received non-JSON response from backend for {action_description}", "warning")
+             return None
     except requests.exceptions.HTTPError as e:
         error_details = f"HTTP Error: {e.response.status_code}"
         try:
@@ -101,20 +116,32 @@ def index():
     total_vram_gb = 0.0
 
     if status_data:
-        service_status = status_data.get("service_status", "Unknown")
-        service_enabled = status_data.get("service_enabled", "Unknown")
-        active_model_key = status_data.get("active_model_key", "N/A")
-        models = status_data.get("configured_models", [])
+        # Check if status_data is a dict before accessing keys
+        if isinstance(status_data, dict):
+            service_status = status_data.get("service_status", "Unknown")
+            service_enabled = status_data.get("service_enabled", "Unknown")
+            active_model_key = status_data.get("active_model_key", "N/A")
+            models = status_data.get("configured_models", [])
+        else:
+             app.logger.error(f"Received unexpected format for status data: {status_data}")
     else: app.logger.warning("Failed to fetch service status from backend.")
 
     if monitoring_data:
-        stats = monitoring_data
-        gpu_stats = stats.get("gpu_stats", [])
-        if gpu_stats:
-            total_vram_mb = sum(gpu.get("memory_total_mb", 0) for gpu in gpu_stats)
-            total_vram_gb = total_vram_mb / 1024.0
-            app.logger.info(f"Calculated total VRAM: {total_vram_gb:.2f} GB")
-        else: app.logger.warning("No GPU stats found in monitoring data to calculate total VRAM.")
+        # Check if monitoring_data is a dict before accessing keys
+        if isinstance(monitoring_data, dict):
+            stats = monitoring_data
+            # Fix: Correctly access the gpu_stats list
+            gpu_stats = stats.get("gpu_stats") # Get the list or None
+            if isinstance(gpu_stats, list) and gpu_stats: # Check if it's a non-empty list
+                total_vram_mb = sum(gpu.get("memory_total_mb", 0) for gpu in gpu_stats)
+                total_vram_gb = total_vram_mb / 1024.0
+                app.logger.info(f"Calculated total VRAM: {total_vram_gb:.2f} GB from {len(gpu_stats)} GPUs.")
+            else:
+                 app.logger.warning("No valid GPU stats list found in monitoring data to calculate total VRAM.")
+                 gpu_stats = [] # Ensure gpu_stats is a list for the template
+        else:
+             app.logger.error(f"Received unexpected format for monitoring data: {monitoring_data}")
+             stats = None # Reset stats if format is wrong
     else: app.logger.warning("Failed to fetch monitoring stats from backend.")
 
     # Fetch popular models, passing available VRAM
@@ -124,10 +151,19 @@ def index():
     # Can also add top_n parameter if needed: popular_params["top_n"] = 10
     popular_models_response = call_backend("GET", "/models/popular", params=popular_params)
 
-    if popular_models_response and popular_models_response.get("status") == "ok":
-        # Assuming backend returns list in 'data' field if wrapped, or directly if not
-        popular_models = popular_models_response.get('data', popular_models_response if isinstance(popular_models_response, list) else [])
-    else: app.logger.warning("Failed to fetch popular models from backend.")
+    # Backend returns a list directly now for this endpoint upon success
+    if isinstance(popular_models_response, list):
+        popular_models = popular_models_response
+        app.logger.info(f"Successfully fetched {len(popular_models)} popular models.")
+    # Handle cases where call_backend might return a dict wrapper or None
+    elif isinstance(popular_models_response, dict) and popular_models_response.get("status") == "ok":
+         # If backend wraps list in 'data' (adjust if needed based on call_backend changes)
+         popular_models = popular_models_response.get('data', [])
+         if popular_models: app.logger.info(f"Successfully fetched {len(popular_models)} popular models (wrapped).")
+         else: app.logger.warning("Fetched popular models but data field was empty or missing.")
+    else:
+         app.logger.warning("Failed to fetch popular models from backend or received unexpected format.")
+         popular_models = [] # Ensure it's a list for the template
 
     configured_model_ids = {m.get('model_id') for m in models}
 
@@ -142,6 +178,8 @@ def index():
                            monitoring_stats=stats,
                            config_path="model_config.json"
                            )
+
+# --- Other Routes remain the same ---
 
 @app.route('/service/<action>', methods=['POST'])
 def handle_service_action(action: str):
@@ -190,18 +228,11 @@ def handle_add_popular_model(model_id: str):
     if not model_id:
          flash("No model ID provided for adding.", "error")
          return redirect(url_for('index'))
-
-    # The model_id might contain slashes, Flask's path converter handles this.
-    # We pass it directly to the backend.
     payload = {"model_ids": [model_id]}
     result = call_backend("POST", "/config/models", json_data=payload)
-
     if result and result.get("status") == "ok":
-        # Check how many were actually added (might have been skipped)
         message = result.get('message', f"Request to add model ID '{model_id}' processed.")
         flash(message, "success")
-    # Error flashing handled by call_backend
-
     return redirect(url_for('index'))
 
 

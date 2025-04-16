@@ -16,6 +16,7 @@ FRONTEND_PID_FILE="${VLLM_HOME}/frontend.pid" # PID file location
 # Get the directory where this script is located (project root)
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 LOG_DIR="${SCRIPT_DIR}/logs" # Log directory in project root
+UNIFIED_LOG_FILE="${LOG_DIR}/vllm_manager.log" # Unified log file name
 
 # Color definitions
 RED='\033[0;31m'
@@ -48,7 +49,7 @@ if ! command -v python3 &> /dev/null; then print_error "python3 not found."; exi
 if ! python3 -m venv -h &> /dev/null; then print_error "python3-venv module not found."; exit 1; fi
 print_info "Python 3 and venv found."
 if ! command -v rsync &> /dev/null; then print_warning "rsync command not found. Will attempt to install."; fi
-if ! command -v jq &> /dev/null; then print_warning "jq command not found. Will attempt to install."; fi # Add jq check
+if ! command -v jq &> /dev/null; then print_warning "jq command not found. Will attempt to install."; fi
 print_info "Checks complete."
 
 
@@ -70,11 +71,10 @@ fi
 if [ "$PERFORM_CLEANUP" = true ]; then
     print_step "Performing Cleanup"
     print_info "Attempting to stop running backend/frontend processes..."
-    # ... (cleanup logic remains the same) ...
     if [ -f "$BACKEND_PID_FILE" ]; then B_PID=$(cat "$BACKEND_PID_FILE"); print_info "Found backend PID file ($BACKEND_PID_FILE) with PID: $B_PID"; if ps -p "$B_PID" > /dev/null; then print_info "Attempting to kill backend process (PID: $B_PID)..."; kill "$B_PID"; sleep 1; if ps -p "$B_PID" > /dev/null; then print_warning "Backend process $B_PID still running, attempting force kill (kill -9)..."; kill -9 "$B_PID" || print_warning "Failed to force kill backend $B_PID."; else print_info "Backend process $B_PID terminated successfully."; fi; else print_info "Backend process $B_PID not found running."; fi; print_info "Removing backend PID file..."; rm -f "$BACKEND_PID_FILE"; else print_info "Backend PID file ($BACKEND_PID_FILE) not found."; fi
     if [ -f "$FRONTEND_PID_FILE" ]; then F_PID=$(cat "$FRONTEND_PID_FILE"); print_info "Found frontend PID file ($FRONTEND_PID_FILE) with PID: $F_PID"; if ps -p "$F_PID" > /dev/null; then print_info "Attempting to kill frontend process (PID: $F_PID)..."; kill "$F_PID"; sleep 1; if ps -p "$F_PID" > /dev/null; then print_warning "Frontend process $F_PID still running, attempting force kill (kill -9)..."; kill -9 "$F_PID" || print_warning "Failed to force kill frontend $F_PID."; else print_info "Frontend process $F_PID terminated successfully."; fi; else print_info "Frontend process $F_PID not found running."; fi; print_info "Removing frontend PID file..."; rm -f "$FRONTEND_PID_FILE"; else print_info "Frontend PID file ($FRONTEND_PID_FILE) not found."; fi
     print_info "Stopping service ${SERVICE_NAME}..."; systemctl stop "$SERVICE_NAME"; print_info "Disabling service ${SERVICE_NAME}..."; systemctl disable "$SERVICE_NAME"; SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"; if [ -f "$SERVICE_FILE_PATH" ]; then print_info "Removing service file ${SERVICE_FILE_PATH}..."; rm -f "$SERVICE_FILE_PATH" || print_warning "Failed to remove service file."; fi; print_info "Reloading systemd daemon..."; systemctl daemon-reload || print_warning "Failed to reload systemd daemon."
-    print_info "Removing installation directory ${VLLM_HOME}..."; rm -rf "$VLLM_HOME" || print_warning "Failed to remove installation directory."; print_info "Removing log directory ${LOG_DIR}..."; rm -rf "$LOG_DIR" || print_warning "Failed to remove log directory."
+    print_info "Removing installation directory ${VLLM_HOME}..."; rm -rf "$VLLM_HOME" || print_warning "Failed to remove installation directory."; print_info "Removing log directory ${LOG_DIR}..." (includes unified log file); rm -rf "$LOG_DIR" || print_warning "Failed to remove log directory."
     print_success "Cleanup finished."
 fi
 
@@ -147,19 +147,15 @@ ACTIVE_MODEL_FILE_ABS="${CONFIG_DIR_ABS}/active_model.txt"
 mkdir -p "$CONFIG_DIR_ABS" || print_warning "Could not create config directory ${CONFIG_DIR_ABS}"
 chown "${VLLM_USER}:${VLLM_GROUP}" "$CONFIG_DIR_ABS" || print_warning "Could not set ownership of ${CONFIG_DIR_ABS}"
 
-# Create empty model config if it doesn't exist
 if [ ! -f "$MODEL_CONFIG_PATH_ABS" ]; then
     print_info "Creating empty model config file: ${MODEL_CONFIG_PATH_ABS}"
     echo "{}" > "$MODEL_CONFIG_PATH_ABS"
     chown "${VLLM_USER}:${VLLM_GROUP}" "$MODEL_CONFIG_PATH_ABS"
 fi
 
-# Create active model file, try setting first model from config as default
 if [ ! -f "$ACTIVE_MODEL_FILE_ABS" ]; then
     print_info "Attempting to set initial active model..."
-    # Use jq to get the first key from the model config JSON
     FIRST_MODEL_KEY=$(jq -r 'keys | .[0] // empty' "$MODEL_CONFIG_PATH_ABS")
-
     if [ -n "$FIRST_MODEL_KEY" ] && [ "$FIRST_MODEL_KEY" != "null" ]; then
         print_info "Setting first model from config ('${FIRST_MODEL_KEY}') as active in ${ACTIVE_MODEL_FILE_ABS}"
         echo "$FIRST_MODEL_KEY" > "$ACTIVE_MODEL_FILE_ABS"
@@ -208,30 +204,32 @@ print_step "Starting Backend and Frontend Services"
 # Start Backend
 print_info "Starting FastAPI backend on port ${BACKEND_PORT}..."
 export VLLM_LOG_DIR="${LOG_DIR}"
-nohup "${VLLM_HOME}/venv/bin/python" -m uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > "${LOG_DIR}/backend_stdout.log" 2>&1 &
+# Use nohup but redirect stdout/stderr to /dev/null, rely on Python file logging
+nohup "${VLLM_HOME}/venv/bin/python" -m uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > /dev/null 2>&1 &
 BACKEND_PID=$!
 if [ -d "$VLLM_HOME" ]; then echo $BACKEND_PID > "$BACKEND_PID_FILE"; else print_warning "Cannot write backend PID file, VLLM_HOME not found."; fi
 unset VLLM_LOG_DIR
-sleep 2
+sleep 2 # Allow time for potential immediate errors
 if ps -p $BACKEND_PID > /dev/null; then
-   print_success "Backend started successfully (PID: $BACKEND_PID). Logs: ${LOG_DIR}/vllm_backend.log"
+   print_success "Backend started successfully (PID: $BACKEND_PID). Logs: ${UNIFIED_LOG_FILE}"
 else
-   print_error "Backend failed to start. Check logs: ${LOG_DIR}/backend_stdout.log and ${LOG_DIR}/vllm_backend.log"
+   print_error "Backend failed to start. Check logs: ${UNIFIED_LOG_FILE}"
 fi
 
 # Start Frontend
 print_info "Starting Flask frontend on port ${FRONTEND_PORT}..."
 export VLLM_LOG_DIR="${LOG_DIR}"
 export FLASK_APP=frontend/app.py
-nohup "${VLLM_HOME}/frontend_venv/bin/python" -m flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > "${LOG_DIR}/frontend_stdout.log" 2>&1 &
+# Use nohup but redirect stdout/stderr to /dev/null, rely on Python file logging
+nohup "${VLLM_HOME}/frontend_venv/bin/python" -m flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > /dev/null 2>&1 &
 FRONTEND_PID=$!
 if [ -d "$VLLM_HOME" ]; then echo $FRONTEND_PID > "$FRONTEND_PID_FILE"; else print_warning "Cannot write frontend PID file, VLLM_HOME not found."; fi
 unset VLLM_LOG_DIR
 sleep 1
 if ps -p $FRONTEND_PID > /dev/null; then
-   print_success "Frontend started successfully (PID: $FRONTEND_PID). Logs: ${LOG_DIR}/vllm_frontend.log"
+   print_success "Frontend started successfully (PID: $FRONTEND_PID). Logs: ${UNIFIED_LOG_FILE}"
 else
-   print_error "Frontend failed to start. Check logs: ${LOG_DIR}/frontend_stdout.log and ${LOG_DIR}/vllm_frontend.log"
+   print_error "Frontend failed to start. Check logs: ${UNIFIED_LOG_FILE}"
 fi
 
 print_step "Setup Complete!"

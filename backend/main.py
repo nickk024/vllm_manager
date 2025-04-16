@@ -1,10 +1,11 @@
 import logging
 import logging.handlers # For file logging
 import os
+import sys # For stderr
 from fastapi import FastAPI
 
-# Import config to get VLLM_HOME and LOGS_DIR early
-from .config import VLLM_HOME, LOGS_DIR
+# Import config to get VLLM_HOME early, LOGS_DIR is now dynamic
+from .config import VLLM_HOME
 
 # Import routers from the routers package
 from .routers import models_router, download_router, service_router, monitoring_router
@@ -13,38 +14,60 @@ from .routers import models_router, download_router, service_router, monitoring_
 from .utils import gpu_utils # This will trigger the NVML init check in gpu_utils
 
 # --- Logging Configuration ---
-LOG_FILE = os.path.join(LOGS_DIR, "vllm_backend.log")
+# Get log directory from environment variable set by start.sh, fallback to default
+LOG_DIR_DEFAULT = os.path.join(VLLM_HOME, "logs") # Default inside install dir
+LOG_DIR = os.environ.get("VLLM_LOG_DIR", LOG_DIR_DEFAULT)
+# Unified log file name
+UNIFIED_LOG_FILE = os.path.join(LOG_DIR, "vllm_manager.log")
 LOG_LEVEL = logging.DEBUG # Set log level to DEBUG for file
 
 # Ensure log directory exists
-os.makedirs(LOGS_DIR, exist_ok=True)
+log_dir_valid = False
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_dir_valid = True
+    print(f"[Backend INFO] Logging directory set to: {LOG_DIR}")
+except OSError as e:
+     print(f"[Backend ERROR] Could not create or access log directory: {LOG_DIR}. Error: {e}", file=sys.stderr)
+     LOG_DIR = None # Indicate failure
+
 
 # Create formatter
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Backend] %(message)s') # Added [Backend] prefix
 
-# Create console handler
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO) # Keep console INFO level
-console_handler.setFormatter(formatter)
-
-# Create rotating file handler
-# Rotates log file when it reaches 10MB, keeps 5 backup files
-file_handler = logging.handlers.RotatingFileHandler(
-    LOG_FILE, maxBytes=10*1024*1024, backupCount=5
-)
-file_handler.setLevel(LOG_LEVEL) # Set file handler level
-file_handler.setFormatter(formatter)
-
-# Get the root logger and add handlers
-# Configure root logger to capture logs from all modules (FastAPI, uvicorn, our code)
+# Get the root logger and configure handlers
 root_logger = logging.getLogger()
 root_logger.setLevel(LOG_LEVEL) # Set root logger level to lowest level (DEBUG)
-root_logger.addHandler(console_handler)
-root_logger.addHandler(file_handler)
 
-# Get logger for this specific module
+# Clear existing handlers (important if uvicorn adds its own)
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# Create console handler
+console_handler = logging.StreamHandler(sys.stderr) # Log to stderr
+console_handler.setLevel(logging.INFO) # Keep console INFO level
+console_handler.setFormatter(formatter)
+root_logger.addHandler(console_handler) # Add console handler
+
+# Create rotating file handler (to unified file) only if LOG_DIR is valid
+if LOG_DIR:
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(
+            UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5 # Shared file
+        )
+        file_handler.setLevel(LOG_LEVEL) # Set file handler level
+        file_handler.setFormatter(formatter)
+        root_logger.addHandler(file_handler) # Add file handler
+        logging.info(f"--- Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_FILE}) ---")
+    except Exception as e:
+         print(f"[Backend ERROR] Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}", file=sys.stderr)
+         logging.error(f"Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}") # Log error to console
+else:
+     logging.warning("--- Backend Logging configured (Console only) ---")
+
+
+# Get logger for this specific module (will inherit handlers from root)
 logger = logging.getLogger(__name__)
-logger.info(f"--- Logging configured (Console: INFO, File: {LOG_LEVEL} at {LOG_FILE}) ---")
 # --- End Logging Configuration ---
 
 
@@ -57,7 +80,7 @@ app = FastAPI(
 
 # Include routers
 logger.info("Including API routers...")
-app.include_router(models_router.router, prefix="/api/v1") # Removed tags here, defined in routers
+app.include_router(models_router.router, prefix="/api/v1")
 app.include_router(download_router.router, prefix="/api/v1")
 app.include_router(service_router.router, prefix="/api/v1")
 app.include_router(monitoring_router.router, prefix="/api/v1")
@@ -71,17 +94,7 @@ async def read_root():
 
 # --- NVML Shutdown Hook ---
 # The import of gpu_utils should handle registration if NVML is available.
-# If a more explicit shutdown is needed within FastAPI's lifecycle:
-# @app.on_event("shutdown")
-# def shutdown_event():
-#     if gpu_utils.NVML_AVAILABLE:
-#         try:
-#             gpu_utils.pynvml.nvmlShutdown()
-#             logger.info("PyNVML shutdown successfully.")
-#         except Exception as e:
-#             logger.error(f"Error during PyNVML shutdown: {e}")
 
 logger.info("FastAPI application initialized.")
 
 # Example: Run with uvicorn vllm_installer.backend.main:app --reload --port 8080
-# Note: Use the module path format for uvicorn
