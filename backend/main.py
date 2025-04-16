@@ -28,20 +28,23 @@ except ImportError:
 # --- End Ray Imports ---
 
 
-# --- Logging Configuration ---
-LOG_DIR_DEFAULT = os.path.join(VLLM_HOME, "logs")
-LOG_DIR = os.environ.get("VLLM_LOG_DIR", LOG_DIR_DEFAULT)
-UNIFIED_LOG_FILE = os.path.join(LOG_DIR, "vllm_manager.log")
+# --- Custom Unified Logger Configuration ---
+import pathlib
+
+SPECIAL_LOG_PATH = "/opt/vllm/special_backend.log"
+SPECIAL_LOG_DIR = os.path.dirname(SPECIAL_LOG_PATH)
 LOG_LEVEL = logging.DEBUG
-log_dir_valid = False
+
+# Ensure the special log directory exists
 try:
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log_dir_valid = True
-    print(f"[Backend INFO] Logging directory set to: {LOG_DIR}")
-except OSError as e:
-     print(f"[Backend ERROR] Could not create/access log directory: {LOG_DIR}. Error: {e}", file=sys.stderr)
-     LOG_DIR = None
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Backend] %(message)s')
+    pathlib.Path(SPECIAL_LOG_DIR).mkdir(parents=True, exist_ok=True)
+    print(f"[Backend INFO] Special log directory set to: {SPECIAL_LOG_DIR}")
+except Exception as e:
+    print(f"[Backend ERROR] Could not create/access special log directory: {SPECIAL_LOG_DIR}. Error: {e}", file=sys.stderr)
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [SpecialBackend] %(message)s')
+
+# Set up the root logger
 root_logger = logging.getLogger()
 root_logger.setLevel(LOG_LEVEL)
 for handler in root_logger.handlers[:]: root_logger.removeHandler(handler)
@@ -49,25 +52,36 @@ console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 root_logger.addHandler(console_handler)
-if LOG_DIR:
-    try:
-        file_handler = logging.handlers.RotatingFileHandler(UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
-        file_handler.setLevel(LOG_LEVEL)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
-        logging.info(f"--- Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_FILE}) ---")
-    except Exception as e:
-         print(f"[Backend ERROR] Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}", file=sys.stderr)
-         logging.error(f"Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}")
-else:
-     logging.warning("--- Backend Logging configured (Console only) ---")
-logger = logging.getLogger(__name__) # Logger for this module
-serve_logger = logging.getLogger("ray.serve") # Get Ray Serve's logger
-serve_logger.setLevel(LOG_LEVEL) # Ensure serve logs are captured at desired level
-if log_dir_valid: serve_logger.addHandler(file_handler) # Add file handler to serve logger too
+
+try:
+    special_file_handler = logging.handlers.RotatingFileHandler(SPECIAL_LOG_PATH, maxBytes=20*1024*1024, backupCount=10)
+    special_file_handler.setLevel(LOG_LEVEL)
+    special_file_handler.setFormatter(formatter)
+    root_logger.addHandler(special_file_handler)
+    logging.info(f"--- Special Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {SPECIAL_LOG_PATH}) ---")
+except Exception as e:
+    print(f"[Backend ERROR] Failed to create special log handler for {SPECIAL_LOG_PATH}. Error: {e}", file=sys.stderr)
+    logging.error(f"Failed to create special log handler for {SPECIAL_LOG_PATH}. Error: {e}")
+
+# Attach the special file handler to Ray Serve logger as well
+serve_logger = logging.getLogger("ray.serve")
+serve_logger.setLevel(LOG_LEVEL)
+serve_logger.addHandler(special_file_handler)
 if not any(isinstance(h, logging.StreamHandler) for h in serve_logger.handlers):
-     serve_logger.addHandler(console_handler) # Ensure serve logs also go to console if needed
-# --- End Logging Configuration ---
+    serve_logger.addHandler(console_handler)
+
+# Optionally, attach to all FastAPI routers if needed
+logger = logging.getLogger(__name__)
+
+# Global exception hook to log uncaught exceptions
+def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = log_uncaught_exceptions
+# --- End Custom Unified Logger Configuration ---
 
 
 # --- Ray Serve Application Definition ---
