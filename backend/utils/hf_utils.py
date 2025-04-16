@@ -58,13 +58,13 @@ def fetch_dynamic_popular_models(
     filtered_models = []
     try:
         api = HfApi(token=hf_token)
-        # Fetch models - convert generator to list immediately
         models_iterator = api.list_models(
             sort="downloads",
             filter="text-generation",
-            limit=limit * 2 # Fetch more initially
+            limit=limit * 2, # Fetch more initially
+            # Add cardData=True to potentially get more metadata, though it slows down the query
+            # cardData=True
         )
-        # Fix: Convert generator to list to get length and iterate
         all_fetched_models = list(models_iterator)
         logger.info(f"Fetched {len(all_fetched_models)} initial models from HF Hub.")
 
@@ -86,12 +86,16 @@ def fetch_dynamic_popular_models(
                     logger.debug(f"Skipping model {model_id}: Est VRAM {estimated_vram:.1f} GB > Available {available_vram_gb:.1f} GB (w/ buffer)")
 
             if fits:
+                # Fix: Ensure 'gated' is always boolean, default to False if None or missing
+                gated_status = getattr(model_info, 'gated', False)
+                if gated_status is None: gated_status = False # Handle None case
+
                 default_config = {"tensor_parallel_size": 1, "max_model_len": 4096, "dtype": "bfloat16"}
                 filtered_models.append({
                     "model_id": model_id,
                     "name": model_id,
                     "size_gb": round(estimated_vram, 1) if estimated_vram else 0.0,
-                    "gated": getattr(model_info, 'gated', False),
+                    "gated": gated_status, # Use the cleaned boolean value
                     "config": default_config,
                     "_debug_tags": tags,
                     "_debug_downloads": getattr(model_info, 'downloads', 0)
@@ -99,7 +103,7 @@ def fetch_dynamic_popular_models(
                 count += 1
                 if count >= top_n:
                     logger.info(f"Reached top_n limit ({top_n}). Stopping processing.")
-                    break # Stop once we have enough fitting models
+                    break
 
     except Exception as e:
         logger.error(f"Failed to fetch or process models from Hugging Face Hub: {e}", exc_info=True)
