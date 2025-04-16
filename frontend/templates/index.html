@@ -22,13 +22,15 @@
         .action-button-danger { background-color: #d9534f; }
         .action-button-warning { background-color: #f0ad4e; }
         .action-button-info { background-color: #5bc0de; }
-        .action-button-add { background-color: #777; }
+        /* Changed Add button style/name */
+        .action-button-download-pop { background-color: #5bc0de; } /* Use info color for download */
         .action-button-activate { background-color: #337ab7; }
         .action-button:hover { opacity: 0.9; }
         .action-button:disabled { background-color: #ccc; cursor: not-allowed; opacity: 0.6; }
         .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
         .flash-success { background-color: #dff0d8; color: #3c763d; border: 1px solid #d6e9c6; }
         .flash-error { background-color: #f2dede; color: #a94442; border: 1px solid #ebccd1; }
+        .flash-warning { background-color: #fcf8e3; color: #8a6d3b; border: 1px solid #faebcc; } /* Added warning style */
         .monitoring-section { background-color: #eef; padding: 15px; border-radius: 5px; margin-top: 20px; }
         .monitoring-section h3 { margin-top: 0; border-bottom: none; }
         .gpu-stats { margin-bottom: 10px; }
@@ -73,7 +75,6 @@
         <form action="{{ url_for('handle_service_action', action='stop') }}" method="post" style="display: inline;">
             <button type="submit" class="action-button action-button-danger" {% if service_status != 'active' %}disabled title="Service not active"{% endif %}>Stop</button>
         </form>
-        <!-- Removed generic restart, use Activate button below -->
         |
         <form action="{{ url_for('handle_service_action', action='enable') }}" method="post" style="display: inline;">
             <button type="submit" class="action-button action-button-info" {% if service_enabled == 'enabled' %}disabled title="Service already enabled"{% endif %}>Enable Boot Start</button>
@@ -152,10 +153,11 @@
                         <td>{{ 'Yes' if model.gated else 'No' }}</td>
                         <td>
                             {% if already_configured %}
-                                <button class="action-button action-button-add" disabled title="Model already in configuration">Configured</button>
+                                <button class="action-button action-button-download-pop" disabled title="Model already in configuration">Configured</button>
                             {% else %}
-                                <form action="{{ url_for('handle_add_popular_model', model_id=model.model_id) }}" method="post" style="display: inline;">
-                                    <button type="submit" class="action-button action-button-add">Add to Config</button>
+                                <!-- Changed button text and action URL -->
+                                <form action="{{ url_for('handle_download_popular_model', model_id=model.model_id) }}" method="post" style="display: inline;">
+                                    <button type="submit" class="action-button action-button-download-pop">Download</button>
                                 </form>
                             {% endif %}
                         </td>

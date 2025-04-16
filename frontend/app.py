@@ -10,14 +10,10 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 # --- Logging Configuration ---
-# Use VLLM_LOG_DIR from environment variable set by start.sh
-# Fallback to a 'logs' directory relative to this script's location if env var not set
 LOG_DIR_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "logs")
 LOG_DIR = os.environ.get("VLLM_LOG_DIR", LOG_DIR_DEFAULT)
-# Unified log file name
 UNIFIED_LOG_FILE = os.path.join(LOG_DIR, "vllm_manager.log")
 LOG_LEVEL = logging.DEBUG
-
 log_dir_valid = False
 try:
     os.makedirs(LOG_DIR, exist_ok=True)
@@ -25,26 +21,16 @@ try:
     print(f"[Flask INFO] Logging directory set to: {LOG_DIR}")
 except OSError as e:
      print(f"[Flask ERROR] Could not create/access log directory: {LOG_DIR}. Error: {e}", file=sys.stderr)
-
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Flask] %(message)s') # Added [Flask] prefix
-
-# Configure Flask's built-in logger
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Flask] %(message)s')
 app.logger.setLevel(LOG_LEVEL)
-for handler in app.logger.handlers[:]: app.logger.removeHandler(handler) # Clear default handlers
-
-# Add console handler
+for handler in app.logger.handlers[:]: app.logger.removeHandler(handler)
 console_handler = logging.StreamHandler(sys.stderr)
-console_handler.setLevel(logging.INFO) # Keep console INFO
+console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 app.logger.addHandler(console_handler)
-
-# Add rotating file handler (to unified file) only if log dir is valid
 if log_dir_valid:
     try:
-        # Use same file name as backend
-        file_handler = logging.handlers.RotatingFileHandler(
-            UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5 # Shared file, maybe larger size
-        )
+        file_handler = logging.handlers.RotatingFileHandler(UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
         file_handler.setLevel(LOG_LEVEL)
         file_handler.setFormatter(formatter)
         app.logger.addHandler(file_handler)
@@ -56,11 +42,13 @@ else:
      app.logger.warning("--- Flask Logging configured (Console only) ---")
 # --- End Logging Configuration ---
 
-
 BACKEND_API_URL = os.environ.get("VLLM_BACKEND_URL", "http://localhost:8080/api/v1")
 
-def call_backend(method: str, endpoint: str, params: dict = None, json_data=None) -> dict | None:
-    """Helper function to call the backend API."""
+def call_backend(method: str, endpoint: str, params: dict = None, json_data=None) -> dict | list | None:
+    """
+    Helper function to call the backend API.
+    Returns dict, list (for popular models), or None on error.
+    """
     url = f"{BACKEND_API_URL}{endpoint}"
     action_description = f"{method} {endpoint}"
     try:
@@ -73,14 +61,10 @@ def call_backend(method: str, endpoint: str, params: dict = None, json_data=None
         try:
             response_json = response.json()
             app.logger.info(f"Backend call successful ({action_description}): {response_json}")
-            # Check if it's a list (like from /models/popular) or a dict
-            # Let's simplify: assume successful non-204 responses are JSON dicts or lists
-            # The calling code needs to handle the structure
+            # Return the raw JSON response (could be dict or list)
             return response_json
         except requests.exceptions.JSONDecodeError:
              app.logger.warning(f"Backend call successful ({action_description}) but response was not JSON: {response.text[:100]}...")
-             # Return None or an error structure if JSON was expected but not received?
-             # For now, return None to indicate unexpected content format
              flash(f"Received non-JSON response from backend for {action_description}", "warning")
              return None
     except requests.exceptions.HTTPError as e:
@@ -109,61 +93,36 @@ def index():
     status_data = call_backend("GET", "/service/status")
     monitoring_data = call_backend("GET", "/monitoring/stats")
 
-    # Initialize data
     service_status = "Error Fetching"; service_enabled = "Error Fetching"
     active_model_key = "Error Fetching"; models = []; stats = None
     popular_models = []
     total_vram_gb = 0.0
 
-    if status_data:
-        # Check if status_data is a dict before accessing keys
-        if isinstance(status_data, dict):
-            service_status = status_data.get("service_status", "Unknown")
-            service_enabled = status_data.get("service_enabled", "Unknown")
-            active_model_key = status_data.get("active_model_key", "N/A")
-            models = status_data.get("configured_models", [])
-        else:
-             app.logger.error(f"Received unexpected format for status data: {status_data}")
+    if isinstance(status_data, dict):
+        service_status = status_data.get("service_status", "Unknown")
+        service_enabled = status_data.get("service_enabled", "Unknown")
+        active_model_key = status_data.get("active_model_key", "N/A")
+        models = status_data.get("configured_models", [])
     else: app.logger.warning("Failed to fetch service status from backend.")
 
-    if monitoring_data:
-        # Check if monitoring_data is a dict before accessing keys
-        if isinstance(monitoring_data, dict):
-            stats = monitoring_data
-            # Fix: Correctly access the gpu_stats list
-            gpu_stats = stats.get("gpu_stats") # Get the list or None
-            if isinstance(gpu_stats, list) and gpu_stats: # Check if it's a non-empty list
-                total_vram_mb = sum(gpu.get("memory_total_mb", 0) for gpu in gpu_stats)
-                total_vram_gb = total_vram_mb / 1024.0
-                app.logger.info(f"Calculated total VRAM: {total_vram_gb:.2f} GB from {len(gpu_stats)} GPUs.")
-            else:
-                 app.logger.warning("No valid GPU stats list found in monitoring data to calculate total VRAM.")
-                 gpu_stats = [] # Ensure gpu_stats is a list for the template
-        else:
-             app.logger.error(f"Received unexpected format for monitoring data: {monitoring_data}")
-             stats = None # Reset stats if format is wrong
+    if isinstance(monitoring_data, dict):
+        stats = monitoring_data
+        gpu_stats = stats.get("gpu_stats")
+        if isinstance(gpu_stats, list) and gpu_stats:
+            total_vram_mb = sum(gpu.get("memory_total_mb", 0) for gpu in gpu_stats)
+            total_vram_gb = total_vram_mb / 1024.0
+            app.logger.info(f"Calculated total VRAM: {total_vram_gb:.2f} GB from {len(gpu_stats)} GPUs.")
+        else: app.logger.warning("No valid GPU stats list found in monitoring data.")
     else: app.logger.warning("Failed to fetch monitoring stats from backend.")
 
-    # Fetch popular models, passing available VRAM
     popular_params = {}
-    if total_vram_gb > 0:
-         popular_params["available_vram_gb"] = round(total_vram_gb, 2)
-    # Can also add top_n parameter if needed: popular_params["top_n"] = 10
+    if total_vram_gb > 0: popular_params["available_vram_gb"] = round(total_vram_gb, 2)
     popular_models_response = call_backend("GET", "/models/popular", params=popular_params)
 
-    # Backend returns a list directly now for this endpoint upon success
     if isinstance(popular_models_response, list):
         popular_models = popular_models_response
         app.logger.info(f"Successfully fetched {len(popular_models)} popular models.")
-    # Handle cases where call_backend might return a dict wrapper or None
-    elif isinstance(popular_models_response, dict) and popular_models_response.get("status") == "ok":
-         # If backend wraps list in 'data' (adjust if needed based on call_backend changes)
-         popular_models = popular_models_response.get('data', [])
-         if popular_models: app.logger.info(f"Successfully fetched {len(popular_models)} popular models (wrapped).")
-         else: app.logger.warning("Fetched popular models but data field was empty or missing.")
-    else:
-         app.logger.warning("Failed to fetch popular models from backend or received unexpected format.")
-         popular_models = [] # Ensure it's a list for the template
+    else: app.logger.warning("Failed to fetch popular models from backend or received unexpected format.")
 
     configured_model_ids = {m.get('model_id') for m in models}
 
@@ -179,11 +138,8 @@ def index():
                            config_path="model_config.json"
                            )
 
-# --- Other Routes remain the same ---
-
 @app.route('/service/<action>', methods=['POST'])
 def handle_service_action(action: str):
-    """Handles start, stop, enable, disable actions."""
     app.logger.info(f"Handling service action request: {action}")
     valid_actions = ["start", "stop", "enable", "disable"]
     if action not in valid_actions:
@@ -196,7 +152,6 @@ def handle_service_action(action: str):
 
 @app.route('/activate/<model_key>', methods=['POST'])
 def handle_activate_model(model_key: str):
-    """Handles activation request for a specific model."""
     app.logger.info(f"Handling activation request for model: {model_key}")
     if not model_key:
          flash("No model key provided for activation.", "error")
@@ -208,8 +163,8 @@ def handle_activate_model(model_key: str):
 
 @app.route('/download/<model_name>', methods=['POST'])
 def handle_download_model(model_name: str):
-    """Handles download request for a specific configured model."""
-    app.logger.info(f"Handling download request for model: {model_name}")
+    """Handles download request for a specific *configured* model."""
+    app.logger.info(f"Handling download request for configured model: {model_name}")
     if not model_name:
          flash("No model name provided for download.", "error")
          return redirect(url_for('index'))
@@ -221,18 +176,50 @@ def handle_download_model(model_name: str):
         flash(f"Download task for model '{model_name}' started in background.", "success")
     return redirect(url_for('index'))
 
-@app.route('/add_popular/<path:model_id>', methods=['POST'])
-def handle_add_popular_model(model_id: str):
-    """Handles request to add a popular model (by ID) to the config."""
-    app.logger.info(f"Handling request to add popular model ID: {model_id}")
+# Renamed route from handle_add_popular_model
+@app.route('/download_popular/<path:model_id>', methods=['POST'])
+def handle_download_popular_model(model_id: str):
+    """Adds a popular model to config and immediately triggers its download."""
+    app.logger.info(f"Handling request to add & download popular model ID: {model_id}")
     if not model_id:
-         flash("No model ID provided for adding.", "error")
+         flash("No model ID provided.", "error")
          return redirect(url_for('index'))
-    payload = {"model_ids": [model_id]}
-    result = call_backend("POST", "/config/models", json_data=payload)
-    if result and result.get("status") == "ok":
-        message = result.get('message', f"Request to add model ID '{model_id}' processed.")
-        flash(message, "success")
+
+    # Step 1: Add the model to the configuration
+    add_payload = {"model_ids": [model_id]}
+    add_result = call_backend("POST", "/config/models", json_data=add_payload)
+
+    if not add_result or add_result.get("status") == "error":
+        # Error already flashed by call_backend
+        flash(f"Failed to add model '{model_id}' to configuration.", "error")
+        return redirect(url_for('index'))
+
+    if add_result.get("status") == "skipped":
+         flash(f"Model '{model_id}' was already configured. Download not triggered.", "warning")
+         return redirect(url_for('index'))
+
+    # Step 2: If added successfully, trigger the download using the returned key
+    added_keys = add_result.get("details", {}).get("added_keys", [])
+    if not added_keys:
+         flash(f"Model '{model_id}' was processed but no new key was returned from backend. Cannot trigger download.", "error")
+         app.logger.error(f"Backend /config/models endpoint succeeded but did not return added_keys for {model_id}")
+         return redirect(url_for('index'))
+
+    new_model_key = added_keys[0] # Get the key generated by the backend
+    app.logger.info(f"Model '{model_id}' added to config with key '{new_model_key}'. Triggering download.")
+
+    # Optional: Get HF Token from form if needed for download
+    hf_token = request.form.get('hf_token')
+    force_download = request.form.get('force') == 'on' # Should probably default to False here
+    download_payload = {"models": [new_model_key], "token": hf_token if hf_token else None, "force": force_download}
+    download_result = call_backend("POST", "/models/download", json_data=download_payload)
+
+    if download_result and download_result.get("status") == "ok":
+        flash(f"Model '{new_model_key}' added to config and download task started in background.", "success")
+    else:
+         # Add config succeeded, but download trigger failed
+         flash(f"Model '{new_model_key}' added to config, but failed to start download task.", "error")
+
     return redirect(url_for('index'))
 
 
