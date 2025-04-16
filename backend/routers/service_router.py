@@ -1,12 +1,15 @@
 import logging
 import time
-import os # Added for file path operations
+import os
+import requests # Added for API test
 from fastapi import APIRouter, HTTPException, status as http_status, Path
+from typing import Optional, Any # Added for API test response
 
 # Import models, config, and utils using relative paths
-from ..models import ServiceActionResponse, ConfiguredModelStatus # Updated import
+from ..models import ServiceActionResponse, ConfiguredModelStatus, ApiTestResponse # Updated import
 from ..utils.systemctl_utils import run_systemctl_command
-from ..config import load_model_config, ACTIVE_MODEL_FILE, SERVICE_NAME # Import config helpers
+# Import config helpers including new active model functions
+from ..config import load_model_config, read_active_model_key, write_active_model_key
 from .models_router import get_available_models_internal # Import helper from models router
 
 logger = logging.getLogger(__name__)
@@ -22,7 +25,6 @@ router = APIRouter(
 @router.post("/start", response_model=ServiceActionResponse, summary="Start vLLM Service")
 async def start_service():
     """Starts the vLLM systemd service."""
-    # Consider checking if an active model is set before starting?
     return run_systemctl_command("start")
 
 @router.post("/stop", response_model=ServiceActionResponse, summary="Stop vLLM Service")
@@ -51,15 +53,11 @@ async def activate_model_and_restart_service(
             detail=f"Model key '{model_key}' not found in configuration."
         )
 
-    # 2. Write the active model key to the file
+    # 2. Write the active model key to the file using config helper
     try:
-        logger.info(f"Setting active model to '{model_key}' in {ACTIVE_MODEL_FILE}")
-        os.makedirs(os.path.dirname(ACTIVE_MODEL_FILE), exist_ok=True) # Ensure directory exists
-        with open(ACTIVE_MODEL_FILE, 'w') as f:
-            f.write(model_key)
-        logger.info(f"Successfully updated {ACTIVE_MODEL_FILE}")
-    except Exception as e:
-        logger.error(f"Failed to write active model key to {ACTIVE_MODEL_FILE}: {e}")
+        write_active_model_key(model_key) # Use the centralized function
+    except IOError as e: # Catch potential IOErrors from the helper
+        logger.error(f"Failed to write active model key: {e}")
         raise HTTPException(
             status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to set active model configuration: {e}"
@@ -86,51 +84,30 @@ async def disable_service():
     """Disables the vLLM systemd service from starting automatically on system boot."""
     return run_systemctl_command("disable")
 
-@router.get("/status", response_model=ConfiguredModelStatus, summary="Get vLLM Service Status") # Use correct response model
+@router.get("/status", response_model=ConfiguredModelStatus, summary="Get vLLM Service Status")
 async def get_service_status_detailed():
     """
     Returns the current status (active/inactive) and enabled status (enabled/disabled)
     of the vLLM systemd service, the currently active model key, and the list of
     all configured models.
     """
-    service_status = "unknown"; service_enabled = "unknown"; active_model_key = None # Default to None
+    service_status = "unknown"; service_enabled = "unknown"
     try:
         active_status_resp = run_systemctl_command("is-active")
         enabled_status_resp = run_systemctl_command("is-enabled")
-        # Check if the command actually failed in a way the helper didn't catch for status
-        if active_status_resp.status == 'ok':
-             service_status = active_status_resp.message
-        else:
-             service_status = f"error_checking ({active_status_resp.message})"
-
-        if enabled_status_resp.status == 'ok':
-             service_enabled = enabled_status_resp.message
-        else:
-             service_enabled = f"error_checking ({enabled_status_resp.message})"
-
+        service_status = active_status_resp.message if active_status_resp.status == 'ok' else f"error_checking ({active_status_resp.message})"
+        service_enabled = enabled_status_resp.message if enabled_status_resp.status == 'ok' else f"error_checking ({enabled_status_resp.message})"
     except HTTPException as e:
-         # If checking status fails via HTTP, report error status
          logger.error(f"Failed to get service status via systemctl: {e.detail}")
          service_status = f"error_checking ({e.detail})"
          service_enabled = f"error_checking ({e.detail})"
     except Exception as e:
-         # Catch any other unexpected errors during status check
          logger.error(f"Unexpected error getting service status: {e}")
          service_status = "error_checking (unexpected)"
          service_enabled = "error_checking (unexpected)"
 
-    # Read the currently configured active model
-    try:
-        if os.path.exists(ACTIVE_MODEL_FILE):
-            with open(ACTIVE_MODEL_FILE, 'r') as f:
-                key = f.read().strip()
-                if key: active_model_key = key
-        else:
-             logger.info(f"Active model file not found at {ACTIVE_MODEL_FILE}. No model explicitly active.")
-             active_model_key = None # Explicitly None if file doesn't exist
-    except Exception as e:
-        logger.warning(f"Could not read active model file {ACTIVE_MODEL_FILE}: {e}")
-        active_model_key = "Error Reading" # Indicate read error
+    # Read the currently configured active model using config helper
+    active_model_key = read_active_model_key() # Returns None if not found/error
 
     # Get configured models using the helper from models_router
     configured_models = get_available_models_internal()
@@ -139,17 +116,18 @@ async def get_service_status_detailed():
     return ConfiguredModelStatus(
         service_status=service_status,
         service_enabled=service_enabled,
-        active_model_key=active_model_key,
+        active_model_key=active_model_key, # Pass None or the key
         configured_models=configured_models
     )
 
-# --- Add API Test Endpoint ---
+# --- API Test Endpoint ---
 @router.get("/test-vllm-api", response_model=ApiTestResponse, summary="Test vLLM API Reachability")
 async def test_vllm_api():
      """Checks if the vLLM OpenAI-compatible API endpoint (/v1/models) is reachable."""
-     # Assuming vLLM runs on localhost relative to the backend
-     # TODO: Make the vLLM API URL configurable?
-     vllm_models_url = "http://localhost:8000/v1/models" # Default vLLM port
+     # TODO: Make the vLLM API URL configurable via config.py?
+     vllm_api_base_url = os.environ.get("VLLM_API_URL", "http://localhost:8000") # Get base URL
+     vllm_models_url = f"{vllm_api_base_url.rstrip('/')}/v1/models"
+
      logger.info(f"Testing vLLM API endpoint: {vllm_models_url}")
      try:
           response = requests.get(vllm_models_url, timeout=5)
@@ -159,7 +137,7 @@ async def test_vllm_api():
                     status="ok",
                     message="vLLM API is reachable and returned model list.",
                     vllm_api_reachable=True,
-                    vllm_response=response.json() # Return the list of models vLLM reports
+                    vllm_response=response.json()
                )
           else:
                logger.warning(f"vLLM API test failed: Received status code {response.status_code}")
@@ -167,7 +145,7 @@ async def test_vllm_api():
                     status="error",
                     message=f"vLLM API returned non-200 status: {response.status_code}",
                     vllm_api_reachable=False,
-                    error_details=response.text[:500] # Limit error detail length
+                    error_details=response.text[:500]
                )
      except requests.exceptions.Timeout:
           logger.error("vLLM API test failed: Connection timed out.")

@@ -1,4 +1,5 @@
 import os
+import sys # For stderr
 import requests
 import logging # Import logging
 import logging.handlers # For file logging
@@ -8,55 +9,75 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24) # Needed for flashing messages
 
 # --- Logging Configuration ---
-# Use VLLM_HOME from environment or default, assuming frontend runs from base dir
-VLLM_HOME = os.environ.get("VLLM_HOME", "/opt/vllm")
-LOGS_DIR = os.path.join(VLLM_HOME, "logs")
-LOG_FILE = os.path.join(LOGS_DIR, "vllm_frontend.log")
+# Get log directory from environment variable set by start.sh
+# Fallback to a 'logs' directory relative to this script's location if env var not set
+LOG_DIR_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "logs") # Default relative to project root
+LOG_DIR = os.environ.get("VLLM_LOG_DIR", LOG_DIR_DEFAULT)
+LOG_FILE = os.path.join(LOG_DIR, "vllm_frontend.log")
 LOG_LEVEL = logging.DEBUG # Set log level to DEBUG for file
 
 # Ensure log directory exists
-os.makedirs(LOGS_DIR, exist_ok=True)
+log_dir_valid = False
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    log_dir_valid = True
+    print(f"[Flask INFO] Logging directory set to: {LOG_DIR}") # Print confirmation at startup
+except OSError as e:
+     print(f"[Flask ERROR] Could not create or access log directory: {LOG_DIR}. Error: {e}", file=sys.stderr)
+     # Frontend might still run but won't log to file
 
 # Create formatter
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Create console handler (Flask's default logger handles console)
-# We will configure Flask's logger directly
-
-# Create rotating file handler
-file_handler = logging.handlers.RotatingFileHandler(
-    LOG_FILE, maxBytes=5*1024*1024, backupCount=3 # Smaller size for frontend logs
-)
-file_handler.setLevel(LOG_LEVEL) # Set file handler level
-file_handler.setFormatter(formatter)
-
 # Configure Flask's built-in logger
 app.logger.setLevel(LOG_LEVEL) # Set overall level for Flask logger
-# Remove default handlers if necessary (optional, depends on desired console output)
-# for handler in app.logger.handlers[:]:
-#     app.logger.removeHandler(handler)
-app.logger.addHandler(file_handler) # Add our file handler
 
-# Also configure root logger slightly to catch logs from libraries like requests
-logging.getLogger().setLevel(logging.WARNING) # Set root higher to avoid excessive library logs
-logging.getLogger().addHandler(file_handler) # Add file handler here too if needed
+# Clear default handlers? Optional, but can prevent duplicate console logs if Flask adds one by default
+# It's generally safer to leave Flask's default console handler unless it causes issues.
+# We will ensure the console handler level is set correctly below.
+for handler in app.logger.handlers[:]:
+     # Remove default handler if we are adding our own configured one
+     # Or just find it and set its level
+     app.logger.removeHandler(handler)
 
-app.logger.info(f"--- Flask Logging configured (Console: Default, File: {LOG_LEVEL} at {LOG_FILE}) ---")
+
+# Add console handler (Flask usually adds one, but let's be explicit for clarity and level setting)
+console_handler = logging.StreamHandler(sys.stderr) # Log to stderr
+console_handler.setLevel(logging.INFO) # Keep console INFO
+console_handler.setFormatter(formatter)
+app.logger.addHandler(console_handler)
+
+
+# Create rotating file handler only if log dir is valid
+if log_dir_valid:
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(
+            LOG_FILE, maxBytes=5*1024*1024, backupCount=3 # Smaller size for frontend logs
+        )
+        file_handler.setLevel(LOG_LEVEL) # Set file handler level
+        file_handler.setFormatter(formatter)
+        app.logger.addHandler(file_handler) # Add file handler to Flask's logger
+        app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {LOG_FILE}) ---")
+    except Exception as e:
+         print(f"[Flask ERROR] Failed to create file log handler for {LOG_FILE}. Error: {e}", file=sys.stderr)
+         app.logger.error(f"Failed to create file log handler for {LOG_FILE}. Error: {e}") # Log error to console
+else:
+     app.logger.warning("--- Flask Logging configured (Console only) ---")
+
 # --- End Logging Configuration ---
 
 
 # Configuration for the backend API URL
-# Assumes backend runs on port 8080 in the same container/network
 BACKEND_API_URL = os.environ.get("VLLM_BACKEND_URL", "http://localhost:8080/api/v1")
 
 def call_backend(method: str, endpoint: str, json_data=None) -> dict | None:
     """Helper function to call the backend API."""
     url = f"{BACKEND_API_URL}{endpoint}"
-    action_description = f"{method} {endpoint}" # For logging/flashing
+    action_description = f"{method} {endpoint}"
     try:
         app.logger.info(f"Calling backend: {action_description} with data: {json_data}")
-        response = requests.request(method, url, json=json_data, timeout=30) # Increased timeout
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        response = requests.request(method, url, json=json_data, timeout=30)
+        response.raise_for_status()
 
         if response.status_code == 204:
              app.logger.info(f"Backend call successful ({action_description}): Status 204 No Content")

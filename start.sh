@@ -11,6 +11,10 @@ BACKEND_PORT=8080
 FRONTEND_PORT=5000
 SERVICE_NAME="vllm" # Must match config.py and systemctl_utils.py
 
+# Get the directory where this script is located (project root)
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+LOG_DIR="${SCRIPT_DIR}/logs" # Log directory in project root
+
 # Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -27,76 +31,74 @@ print_step() { echo -e "\n${BOLD}${BLUE}=== $1 ===${NC}"; }
 
 # --- Sanity Checks ---
 print_step "Running Sanity Checks"
-# Check if running as root (some steps need sudo)
 if [[ $EUID -eq 0 ]]; then
   print_warning "Running as root. It's recommended to run as a user with sudo privileges."
-  # Consider exiting or prompting
+  # If running as root, attempt to find a non-root user or default to root
+  # This is complex; for now, we proceed but ownership might be root:root if run as root
+  # A better approach is to require running as non-root with sudo rights.
 fi
 
-# Check for sudo
-if ! command -v sudo &> /dev/null; then
-    print_error "sudo command not found. Please install sudo."
-    exit 1
+if ! command -v sudo &> /dev/null; then print_error "sudo command not found."; exit 1; fi
+if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
+    print_warning "Current user might not have passwordless sudo. You might be prompted for password."
+    print_warning "Passwordless sudo for 'systemctl [...] ${SERVICE_NAME}' is required for API control."
 fi
-# Check if user has sudo privileges (non-interactively)
-if ! sudo -n true 2>/dev/null; then
-    print_warning "Current user might not have passwordless sudo privileges."
-    print_warning "You might be prompted for your password during setup."
-    print_warning "Passwordless sudo for 'systemctl [start|stop|restart|enable|disable] ${SERVICE_NAME}' is required for the backend API to fully function."
-fi
-
-# Check for NVIDIA drivers (basic check)
-if ! command -v nvidia-smi &> /dev/null; then
-    print_error "NVIDIA drivers not found (nvidia-smi command missing)."
-    print_error "Please install appropriate NVIDIA drivers and CUDA toolkit for your system."
-    exit 1
-else
-    print_info "NVIDIA drivers detected."
-    nvidia-smi -L
-fi
-
-# Check for Python 3 and venv
-if ! command -v python3 &> /dev/null; then
-    print_error "python3 not found. Please install Python 3."
-    exit 1
-fi
-if ! python3 -m venv -h &> /dev/null; then
-     print_error "python3-venv module not found. Please install it (e.g., sudo apt install python3-venv)."
-     exit 1
-fi
+if ! command -v nvidia-smi &> /dev/null; then print_error "NVIDIA drivers not found (nvidia-smi missing)."; exit 1; fi
+print_info "NVIDIA drivers detected."; nvidia-smi -L
+if ! command -v python3 &> /dev/null; then print_error "python3 not found."; exit 1; fi
+if ! python3 -m venv -h &> /dev/null; then print_error "python3-venv module not found."; exit 1; fi
 print_info "Python 3 and venv found."
+if ! command -v rsync &> /dev/null; then print_error "rsync command not found."; exit 1; fi
+print_info "rsync found."
+
 
 # --- System Dependencies ---
 print_step "Installing System Dependencies (Requires sudo)"
-# Update package list
 sudo apt-get update -q || { print_error "apt-get update failed."; exit 1; }
-# Install essential tools
-sudo apt-get install -y -q build-essential git wget curl jq || { print_error "Failed to install essential packages."; exit 1; }
-# Install Python dev headers (needed for some pip packages)
-sudo apt-get install -y -q python3-dev || { print_error "Failed to install python3-dev."; exit 1; }
+sudo apt-get install -y -q build-essential git wget curl jq rsync || { print_error "Failed to install essential packages."; exit 1; }
+sudo apt-get install -y -q python3-dev python3-venv || { print_error "Failed to install python3-dev/venv."; exit 1; }
 print_success "System dependencies installed."
 
-# --- Create Directories ---
+# --- Create Directories & Copy Project Files ---
 print_step "Creating Installation Directory: ${VLLM_HOME}"
 sudo mkdir -p "$VLLM_HOME" || { print_error "Failed to create directory $VLLM_HOME"; exit 1; }
-# Ensure the target user owns the directory
 sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to change ownership of $VLLM_HOME"; exit 1; }
-cd "$VLLM_HOME" || { print_error "Failed to change directory to $VLLM_HOME"; exit 1; }
 print_success "Directory created and ownership set."
 
+print_step "Copying Project Files to ${VLLM_HOME}"
+rsync -a --delete --exclude='.git/' --exclude='legacy/' --exclude='logs/' --exclude='*venv/' --exclude='__pycache__/' "${SCRIPT_DIR}/" "${VLLM_HOME}/" || { print_error "Failed to copy project files using rsync."; exit 1; }
+# Ensure ownership AGAIN after rsync, as rsync might preserve source ownership
+sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to set final ownership of $VLLM_HOME"; exit 1; }
+print_success "Project files copied."
+
+# --- Create Log Directory ---
+print_step "Creating Log Directory: ${LOG_DIR}"
+mkdir -p "$LOG_DIR" || { print_error "Failed to create log directory $LOG_DIR"; exit 1; }
+chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR" || print_warning "Could not set ownership of log directory ${LOG_DIR}"
+print_success "Log directory created."
+
+# --- Change into Installation Directory ---
+print_info "Attempting to change directory to ${VLLM_HOME}"
+cd "$VLLM_HOME"
+CD_EXIT_CODE=$?
+if [ $CD_EXIT_CODE -ne 0 ]; then
+    print_error "Failed to change directory to $VLLM_HOME (Exit code: $CD_EXIT_CODE)"
+    exit 1
+fi
+print_info "Successfully changed working directory to $(pwd)"
+
+
 # --- Setup Python Virtual Environments ---
-print_step "Setting up Python Virtual Environments"
-# Backend venv
+print_step "Setting up Python Virtual Environments (in $(pwd))"
 if [ ! -d "venv" ]; then
     python3 -m venv venv || { print_error "Failed to create backend virtual environment."; exit 1; }
-    print_info "Backend virtual environment created at ${VLLM_HOME}/venv"
+    print_info "Backend virtual environment created."
 else
     print_info "Backend virtual environment already exists."
 fi
-# Frontend venv (can share backend venv if desired, but separate is cleaner)
 if [ ! -d "frontend_venv" ]; then
     python3 -m venv frontend_venv || { print_error "Failed to create frontend virtual environment."; exit 1; }
-    print_info "Frontend virtual environment created at ${VLLM_HOME}/frontend_venv"
+    print_info "Frontend virtual environment created."
 else
     print_info "Frontend virtual environment already exists."
 fi
@@ -107,11 +109,11 @@ print_step "Installing Python Dependencies"
 print_info "Installing backend dependencies..."
 source "${VLLM_HOME}/venv/bin/activate" || { print_error "Failed to activate backend venv."; exit 1; }
 pip install --upgrade pip || print_warning "Failed to upgrade pip."
-# Install from requirements.txt if it exists, otherwise install core list
-if [ -f "backend/requirements.txt" ]; then
-    pip install -r backend/requirements.txt || { print_error "Failed to install backend requirements from file."; exit 1; }
+if [ ! -f "backend/requirements.txt" ]; then
+    print_warning "backend/requirements.txt not found. Installing core list."
+    pip install "fastapi[all]" uvicorn huggingface_hub requests pynvml || { print_error "Failed to install core backend dependencies."; deactivate; exit 1; }
 else
-    pip install "fastapi[all]" uvicorn huggingface_hub requests pynvml || { print_error "Failed to install core backend dependencies."; exit 1; }
+    pip install -r backend/requirements.txt || { print_error "Failed to install backend requirements from file."; deactivate; exit 1; }
 fi
 deactivate
 print_success "Backend dependencies installed."
@@ -120,10 +122,11 @@ print_success "Backend dependencies installed."
 print_info "Installing frontend dependencies..."
 source "${VLLM_HOME}/frontend_venv/bin/activate" || { print_error "Failed to activate frontend venv."; exit 1; }
 pip install --upgrade pip || print_warning "Failed to upgrade pip."
-if [ -f "frontend/requirements.txt" ]; then
-    pip install -r frontend/requirements.txt || { print_error "Failed to install frontend requirements from file."; exit 1; }
+if [ ! -f "frontend/requirements.txt" ]; then
+     print_warning "frontend/requirements.txt not found. Installing core list."
+     pip install Flask requests || { print_error "Failed to install core frontend dependencies."; deactivate; exit 1; }
 else
-     pip install Flask requests || { print_error "Failed to install core frontend dependencies."; exit 1; }
+    pip install -r frontend/requirements.txt || { print_error "Failed to install frontend requirements from file."; deactivate; exit 1; }
 fi
 deactivate
 print_success "Frontend dependencies installed."
@@ -131,25 +134,31 @@ print_success "Frontend dependencies installed."
 # --- Setup Systemd Service ---
 print_step "Setting up Systemd Service (Requires sudo)"
 SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-TEMPLATE_PATH="${VLLM_HOME}/backend/vllm.service.template"
+TEMPLATE_PATH="${VLLM_HOME}/backend/vllm.service.template" # Path relative to VLLM_HOME now
 
-if [ ! -f "$TEMPLATE_PATH" ]; then
-    print_error "Systemd service template not found at ${TEMPLATE_PATH}"
-    exit 1
+# --- Debug: Check template path right before use ---
+print_info "--- Pre-Systemd Check ---"
+print_info "Current directory: $(pwd)"
+print_info "Checking for template existence at: ${TEMPLATE_PATH}"
+if [ -f "$TEMPLATE_PATH" ]; then
+    print_success "Template file found at ${TEMPLATE_PATH}"
+else
+    print_error "Template file NOT FOUND at ${TEMPLATE_PATH}"
+    print_info "Listing contents of ${VLLM_HOME}:"
+    sudo ls -la "$VLLM_HOME"
+    print_info "Listing contents of ${VLLM_HOME}/backend:"
+    sudo ls -la "$VLLM_HOME/backend"
+    exit 1 # Exit if template not found here
 fi
+# --- End Debug ---
 
 print_info "Creating systemd service file at ${SERVICE_FILE_PATH}"
-# Replace placeholders in the template and write to the systemd directory
 sudo sed -e "s|%USER%|${VLLM_USER}|g" \
          -e "s|%VLLM_HOME%|${VLLM_HOME}|g" \
          "$TEMPLATE_PATH" | sudo tee "$SERVICE_FILE_PATH" > /dev/null || { print_error "Failed to create systemd service file."; exit 1; }
 
 print_info "Reloading systemd daemon..."
 sudo systemctl daemon-reload || { print_error "Failed to reload systemd daemon."; exit 1; }
-
-# Optionally enable the service here, or instruct user
-# print_info "Enabling vLLM service to start on boot..."
-# sudo systemctl enable ${SERVICE_NAME} || print_warning "Failed to enable service automatically."
 
 print_success "Systemd service configured."
 print_warning "IMPORTANT: For the backend API to control the service (start/stop/etc.),"
@@ -165,36 +174,38 @@ print_step "Starting Backend and Frontend Services"
 # Start Backend (uvicorn) in the background
 print_info "Starting FastAPI backend on port ${BACKEND_PORT}..."
 source "${VLLM_HOME}/venv/bin/activate" || { print_error "Failed to activate backend venv."; exit 1; }
-# Run in background, redirect output to log file
-nohup uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > "${VLLM_HOME}/logs/backend.log" 2>&1 &
+export VLLM_LOG_DIR="${LOG_DIR}" # Pass log dir via env var
+nohup uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > "${LOG_DIR}/backend_stdout.log" 2>&1 &
 BACKEND_PID=$!
 deactivate
-sleep 2 # Give it a moment to start
+unset VLLM_LOG_DIR
+sleep 2
 if ps -p $BACKEND_PID > /dev/null; then
-   print_success "Backend started successfully (PID: $BACKEND_PID). Logs: ${VLLM_HOME}/logs/backend.log"
+   print_success "Backend started successfully (PID: $BACKEND_PID). Logs: ${LOG_DIR}/vllm_backend.log"
 else
-   print_error "Backend failed to start. Check logs: ${VLLM_HOME}/logs/backend.log"
-   # Consider exiting if backend fails
+   print_error "Backend failed to start. Check logs: ${LOG_DIR}/backend_stdout.log and ${LOG_DIR}/vllm_backend.log"
 fi
 
 # Start Frontend (Flask) in the background
 print_info "Starting Flask frontend on port ${FRONTEND_PORT}..."
 source "${VLLM_HOME}/frontend_venv/bin/activate" || { print_error "Failed to activate frontend venv."; exit 1; }
-# Run in background, redirect output to log file
-nohup python frontend/app.py > "${VLLM_HOME}/logs/frontend.log" 2>&1 &
+export VLLM_LOG_DIR="${LOG_DIR}" # Pass log dir via env var
+export FLASK_APP=frontend/app.py
+nohup flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > "${LOG_DIR}/frontend_stdout.log" 2>&1 &
 FRONTEND_PID=$!
 deactivate
+unset VLLM_LOG_DIR
 sleep 1
 if ps -p $FRONTEND_PID > /dev/null; then
-   print_success "Frontend started successfully (PID: $FRONTEND_PID). Logs: ${VLLM_HOME}/logs/frontend.log"
+   print_success "Frontend started successfully (PID: $FRONTEND_PID). Logs: ${LOG_DIR}/vllm_frontend.log"
 else
-   print_error "Frontend failed to start. Check logs: ${VLLM_HOME}/logs/frontend.log"
+   print_error "Frontend failed to start. Check logs: ${LOG_DIR}/frontend_stdout.log and ${LOG_DIR}/vllm_frontend.log"
 fi
 
 print_step "Setup Complete!"
 echo -e "Backend API should be running at: ${BOLD}http://<server_ip>:${BACKEND_PORT}${NC}"
 echo -e "Frontend Admin UI should be running at: ${BOLD}http://<server_ip>:${FRONTEND_PORT}${NC}"
 echo -e "Remember to configure passwordless sudo for service control if you haven't already."
-echo -e "Use 'sudo systemctl status ${SERVICE_NAME}' to check the vLLM service status."
+echo -e "Use 'sudo systemctl status ${SERVICE_NAME}' to check the vLLM service status (it may need to be started manually or via the UI)."
 
 exit 0
