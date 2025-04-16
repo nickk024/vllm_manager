@@ -61,38 +61,14 @@
         {% endwith %}
 
         <!-- Service Status and Control -->
-        <h2>vLLM Service Control</h2>
+        <!-- Ray Serve Status -->
+        <h2>Ray Serve Status</h2>
         <p>
-            Service Status:
+            <strong>Status:</strong>
             <span class="status-{{ service_status }}">
                 {{ service_status | capitalize }}
             </span>
-            | Enabled at Boot:
-            <span class="status-{{ service_enabled }}">
-                {{ service_enabled | capitalize }}
-            </span>
-             <!-- Removed Active Model Key display -->
         </p>
-        <form action="{{ url_for('handle_service_action', action='start') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button" {% if service_status == 'active' %}disabled title="Service already active"{% endif %}>Start Service</button>
-        </form>
-        <form action="{{ url_for('handle_service_action', action='stop') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button action-button-danger" {% if service_status != 'active' %}disabled title="Service not active"{% endif %}>Stop Service</button>
-        </form>
-        <form action="{{ url_for('handle_service_action', action='restart') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button action-button-warning">Restart Service</button>
-            <span class="note">(Use after changing 'Serve' status)</span>
-        </form>
-        <br>
-        <form action="{{ url_for('handle_service_action', action='enable') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button action-button-info" {% if service_enabled == 'enabled' %}disabled title="Service already enabled"{% endif %}>Enable Boot Start</button>
-        </form>
-        <form action="{{ url_for('handle_service_action', action='disable') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button action-button-danger" {% if service_enabled != 'enabled' %}disabled title="Service not enabled"{% endif %}>Disable Boot Start</button>
-        </form>
-        <div class="restart-note">
-            <strong>Note:</strong> You must click "Restart Service" after changing the "Serve" status of any model for the changes to take effect in the running vLLM instance.
-        </div>
 
         <!-- Configured Models -->
         <h2>Configured Models</h2>

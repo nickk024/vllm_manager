@@ -130,6 +130,8 @@ async def add_model_to_config(req: AddModelRequest):
               message=f"No models added. Skipped {skipped_count} (already configured)."
          )
 
+from ..ray_deployments import build_llm_app
+
 @router.put("/config/models/{model_key}/serve", response_model=GeneralResponse, summary="Toggle Serve Status for a Model")
 async def toggle_model_serve_status(
     model_key: str = Path(..., description="The configuration key of the model to modify."),
@@ -137,7 +139,7 @@ async def toggle_model_serve_status(
 ):
     """
     Sets the 'serve' status for a specific model in the configuration file.
-    Requires a service redeploy via '/service/redeploy' for the change to take effect.
+    Triggers a Ray Serve redeployment for the change to take effect.
     """
     logger.info(f"Request to set serve status for '{model_key}' to {req.serve}")
     current_config = load_model_config()
@@ -153,10 +155,34 @@ async def toggle_model_serve_status(
     current_config[model_key]["serve"] = req.serve
     save_model_config(current_config)
 
-    status_str = "enabled" if req.serve else "disabled"
-    return GeneralResponse(
-        status="ok",
-        message=f"Serve status for model '{model_key}' set to {status_str}. Redeploy service for change to take effect."
-    )
+    # Trigger Ray Serve redeployment
+    try:
+        import ray
+        from ray import serve
+        # Ensure Ray is initialized
+        if not ray.is_initialized():
+            ray.init(address="auto", namespace="serve", ignore_reinit_error=True)
+        # Build new LLMApp config and redeploy
+        llm_app = build_llm_app(current_config)
+        serve.run(
+            llm_app,
+            name="vllm_app",
+            route_prefix="/",
+            host="0.0.0.0",
+            port=8000,
+            blocking=False
+        )
+        logger.info("Ray Serve redeployment triggered after serve status change.")
+        status_str = "enabled" if req.serve else "disabled"
+        return GeneralResponse(
+            status="ok",
+            message=f"Serve status for model '{model_key}' set to {status_str}. Ray Serve redeployed."
+        )
+    except Exception as e:
+        logger.error(f"Failed to redeploy Ray Serve after serve status change: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Serve status updated, but failed to redeploy Ray Serve: {e}"
+        )
 
 # TODO: Add endpoint to REMOVE a model from config? DELETE /config/models/{model_key}

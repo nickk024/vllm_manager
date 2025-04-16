@@ -19,82 +19,50 @@ from .models_router import get_configured_models_internal # Import helper from m
 logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/service", # Prefix for management API
-    tags=["Service Management (Systemd)"] # Updated tag
+    tags=["Service Management (Ray Serve)"] # Updated tag
 )
 
-# Note: This router now controls the systemd service which runs vllm_launcher.py
-# The launcher itself handles loading multiple models based on config.
+# Note: This router now manages Ray Serve status and API health.
+# Systemd and vllm_launcher.py logic has been removed.
 
-# WARNING: These endpoints execute sudo commands if not run as root.
-# Ensure the user running the FastAPI server has *specific, limited* passwordless sudo rights
-# ONLY for 'systemctl start/stop/restart/enable/disable vllm'.
+# TODO: Add endpoints for Ray Serve deployment management (e.g., manual model unload, reload, etc.)
 
-@router.post("/start", response_model=ServiceActionResponse, summary="Start vLLM Service")
-async def start_service():
+# Systemd service management endpoints removed.
+
+@router.get("/status", response_model=ServiceStatusResponse, summary="Get Ray Serve Status")
+async def get_ray_serve_status():
     """
-    Starts the vLLM systemd service.
-    The launcher script will attempt to load models marked 'serve: true'.
-    """
-    return run_systemctl_command("start")
-
-@router.post("/stop", response_model=ServiceActionResponse, summary="Stop vLLM Service")
-async def stop_service():
-    """Stops the vLLM systemd service."""
-    return run_systemctl_command("stop")
-
-@router.post("/restart", response_model=ServiceActionResponse, summary="Restart vLLM Service")
-async def restart_service():
-    """
-    Restarts the vLLM systemd service.
-    Use this to apply changes after modifying which models are marked 'serve: true'
-    in the configuration or after downloading new models marked to serve.
-    """
-    response = run_systemctl_command("restart")
-    # Add a small delay to allow service to potentially start/settle
-    time.sleep(5) # Increased delay slightly for multi-model load
-    return response
-
-# Removed /activate/{model_key} endpoint
-
-@router.post("/enable", response_model=ServiceActionResponse, summary="Enable vLLM Service at Boot")
-async def enable_service():
-    """Enables the vLLM systemd service to start automatically on system boot."""
-    return run_systemctl_command("enable")
-
-@router.post("/disable", response_model=ServiceActionResponse, summary="Disable vLLM Service at Boot")
-async def disable_service():
-    """Disables the vLLM systemd service from starting automatically on system boot."""
-    return run_systemctl_command("disable")
-
-@router.get("/status", response_model=ServiceStatusResponse, summary="Get vLLM Service Status")
-async def get_service_status_detailed():
-    """
-    Returns the current status (active/inactive) and enabled status (enabled/disabled)
-    of the vLLM systemd service, along with the list of all configured models
+    Returns the current status of Ray Serve and the list of all configured models
     (including their 'serve' status and download status).
     """
-    service_status = "unknown"; service_enabled = "unknown"
+    # Ray Serve status check (basic)
     try:
-        active_status_resp = run_systemctl_command("is-active")
-        enabled_status_resp = run_systemctl_command("is-enabled")
-        service_status = active_status_resp.message if active_status_resp.status == 'ok' else f"error_checking ({active_status_resp.message})"
-        service_enabled = enabled_status_resp.message if enabled_status_resp.status == 'ok' else f"error_checking ({enabled_status_resp.message})"
-    except HTTPException as e:
-         logger.error(f"Failed to get service status via systemctl: {e.detail}")
-         service_status = f"error_checking ({e.detail})"
-         service_enabled = f"error_checking ({e.detail})"
+        import ray
+        from ray import serve
+        ray_status = "unknown"
+        serve_status = "unknown"
+        # Try to get Ray and Serve status
+        if ray.is_initialized():
+            ray_status = "running"
+            try:
+                serve_controller = serve.api._get_global_client()
+                serve_status = "running" if serve_controller else "not_running"
+            except Exception:
+                serve_status = "not_running"
+        else:
+            ray_status = "not_running"
+            serve_status = "not_running"
     except Exception as e:
-         logger.error(f"Unexpected error getting service status: {e}")
-         service_status = "error_checking (unexpected)"
-         service_enabled = "error_checking (unexpected)"
+        logger.error(f"Error checking Ray Serve status: {e}")
+        ray_status = "error"
+        serve_status = "error"
 
     # Get configured models using the helper from models_router
     configured_models = get_configured_models_internal() # This now includes serve_status
 
-    # Return using the Pydantic model (active_model_key is removed from model)
     return ServiceStatusResponse(
-        service_status=service_status,
-        service_enabled=service_enabled,
+        service_status=f"Ray: {ray_status}, Serve: {serve_status}",
+        service_enabled="N/A",
         configured_models=configured_models
     )
 

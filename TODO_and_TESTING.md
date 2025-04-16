@@ -1,62 +1,78 @@
-# TODOs and Production Testing Plan
+# TODOs and Production Testing Plan (Ray Serve Architecture)
 
-This document outlines remaining tasks and suggestions for testing the vLLM management backend and frontend in a production-like environment (e.g., the target LXC container).
+This document outlines remaining tasks and suggestions for testing the vLLM management backend and frontend, now architected for **Ray Serve**-based dynamic model serving.
+
+---
 
 ## Outstanding TODOs / Potential Enhancements
 
-*   **API Test Endpoint:** The `/service/test-vllm-api` endpoint was added to the service router (`service_router.py`) but needs a corresponding button/display in the Flask frontend (`frontend/templates/index.html` and `frontend/app.py`) if desired.
-*   **Error Handling:** Review error handling in both backend and frontend for edge cases (e.g., backend down, specific `systemctl` failures, download errors, config file corruption). The `call_backend` helper in Flask could be made more robust.
-*   **Security - `sudo` Permissions:** The current method of using passwordless `sudo` for `systemctl` in the backend API is convenient but carries security risks. **Strongly consider** alternatives for production:
-    *   A dedicated, minimal privileged helper script/daemon.
-    *   Using a message queue where the backend sends requests and a separate privileged process executes them.
-    *   Running the backend API itself as a dedicated system user with *only* the necessary `systemctl` permissions granted via `sudoers`.
-*   **Security - API Authentication:** The backend API currently has no authentication. Add API key authentication or another mechanism if exposing it beyond localhost.
-*   **Configuration Management:**
-    *   Allow editing/removing models from `model_config.json` via the API/UI.
-    *   Make backend/frontend ports and the backend URL configurable via environment variables more consistently (partially done).
-    *   Consider storing configuration (like `active_model.txt`) in a more robust way if needed (e.g., small database, dedicated config service).
-*   **Download Task Status:** The background download task currently only logs completion/errors. Implement a way for the frontend to poll for or receive real-time status updates (e.g., via WebSockets or a status endpoint).
-*   **Frontend Polish:** The Flask UI is basic. Improve styling, add loading indicators for actions, provide more detailed feedback.
-*   **Process Management:** The `start.sh` script uses `nohup` to run backend/frontend. For production, use a proper process manager like `supervisor` or run them as systemd services (potentially user services) for better reliability and management.
-*   **Logging:** Review log levels and messages. Consider structured logging (JSON) for easier parsing. Ensure log rotation settings are appropriate.
-*   **Resource Usage:** The `get_system_stats` uses `top` and `free`, which might not be the most efficient or cross-platform way. Consider using the `psutil` Python library if adding dependencies is acceptable.
-*   **Dependencies:** Create `requirements.txt` files for both backend and frontend based on the final imports. Update `start.sh` to use them.
+*   **Ray Serve Dynamic Loading/Unloading:** Implement logic (in Ray Serve deployment or backend) to load models on demand and unload after a configurable idle timeout (e.g., 10 minutes).
+*   **Always-On Model:** Ensure the base model (e.g., `nomic-ai/nomic-embed-text-v1.5`) is always loaded at startup.
+*   **Management API/UI:** Refactor endpoints and UI to:
+    *   Toggle "serve" status for models.
+    *   Trigger Ray Serve redeploys (to load/unload models).
+    *   Remove systemd controls and activation logic.
+    *   Display Ray Serve status and currently loaded models.
+*   **OpenWebUI Integration:** Confirm OpenWebUI can connect to Ray Serve's OpenAI-compatible endpoint, see the list of loaded models, and send inference requests.
+*   **Resource Management:** Add warnings or prevent toggling "serve" for too many models if VRAM is insufficient.
+*   **Monitoring:** Enhance monitoring UI for Ray Serve deployments and resource usage.
+*   **API Authentication:** Add authentication to management API if exposed.
+*   **Process Management:** Consider using supervisor or systemd for backend/frontend if needed.
+*   **Logging:** Ensure unified logging is robust and rotated.
+*   **Requirements Files:** Generate `requirements.txt` for backend and frontend. Update `start.sh` to use them.
+*   **Testing:** See below for updated testing plan.
 
-## Production Testing Plan
+---
+
+## Production Testing Plan (Ray Serve)
 
 1.  **Environment Setup:**
-    *   Set up the target LXC container with Ubuntu/Debian.
-    *   Install correct NVIDIA drivers and CUDA toolkit **manually**. Verify with `nvidia-smi`.
-    *   Copy the project files into the LXC.
+    *   Set up LXC, install NVIDIA drivers/CUDA, verify with `nvidia-smi`.
+    *   Copy project files.
 2.  **Run `start.sh`:**
-    *   Execute `./start.sh`. Monitor output for errors during dependency installation, venv setup, and service configuration.
-    *   Verify directories (`/opt/vllm`, logs, config, models, venv) are created with correct ownership (`whoami` user).
-3.  **Configure `sudoers`:**
-    *   **Carefully** edit `/etc/sudoers` (using `sudo visudo`) to grant the user running the backend passwordless permission *only* for the necessary `systemctl` commands related to the `vllm` service, as shown in the `start.sh` output. Test this permission manually (`sudo -l -U <username>`).
-4.  **Verify Services:**
-    *   Check if the backend (uvicorn) and frontend (flask) processes are running (`ps aux | grep uvicorn`, `ps aux | grep flask`).
-    *   Check the logs in `/opt/vllm/logs/` for startup errors.
-    *   Check systemd status: `sudo systemctl status vllm`. It might be inactive initially.
-5.  **Frontend UI Testing:**
+    *   Execute `./start.sh`. Choose 'y' for initial cleanup if needed. Monitor for errors.
+    *   Verify directories (`/opt/vllm`, `logs`, etc.) created.
+    *   Ray Serve head node should be running (`ray status`), dashboard at `:8265`.
+3.  **Configure & Download Models (via UI/API):**
     *   Access the Flask UI (`http://<lxc-ip>:5000`).
-    *   Verify initial status display (service status, models list, monitoring stats). Are GPU stats showing correctly?
-    *   **Model Configuration:** Use the API (e.g., via `curl` or modifying the frontend) to add a popular model using `/api/v1/config/models`. Verify `model_config.json` is updated.
-    *   **Model Download:** Trigger a download for a configured model via the UI. Monitor backend logs (`/opt/vllm/logs/vllm_backend.log`) for progress/errors. Verify model files appear in `/opt/vllm/models/<model_key>/`. Test downloading gated models (requires passing HF token if UI is updated, or setting `HF_TOKEN` env var for backend).
-    *   **Service Control:** Use UI buttons to:
-        *   Start the service. Verify `sudo systemctl status vllm` shows active. Check backend logs.
-        *   Stop the service. Verify status changes.
-        *   Enable the service. Verify with `sudo systemctl is-enabled vllm`.
-        *   Disable the service. Verify status.
-    *   **Model Activation:**
-        *   Ensure at least two different models (ideally with different TP requirements) are configured and downloaded.
-        *   Activate Model A using the UI button. Verify `active_model.txt` contains Model A's key. Verify `sudo systemctl status vllm` shows active (or restarted). Check launcher logs in systemd journal (`sudo journalctl -u vllm -f`) to see if it logged loading Model A with the correct TP size. Test inference via vLLM API (port 8000).
-        *   Activate Model B. Verify `active_model.txt` updates. Verify service restarts. Check launcher logs for Model B and its TP size. Test inference.
-    *   **Monitoring:** Refresh the UI and check if monitoring stats update and look reasonable.
-6.  **Multi-GPU Testing:**
-    *   If using multiple GPUs, specifically check the `tensor_parallel_size` logged by `vllm_launcher.py` (via `sudo journalctl -u vllm`) when activating models of different sizes. Does it match the value calculated and stored in `model_config.json`?
-    *   Check GPU utilization across multiple GPUs during inference using `nvidia-smi` or the monitoring endpoint.
-7.  **Stress Testing (Optional):**
-    *   Send multiple concurrent requests to the vLLM API.
-    *   Trigger downloads while inference is running.
-    *   Monitor resource usage (CPU, RAM, GPU VRAM) under load.
-8.  **Log Review:** Check both backend and frontend logs for any warnings or errors during testing. Check systemd journal for vLLM service logs.
+    *   Use the "Popular Models" list (or API) to add desired models (e.g., `nomic-embed-text-v1.5`, Llama 3) to the config using the "Add to Config" button. Verify they appear in the "Configured Models" table.
+    *   Use the "Download" button for each newly added model. Monitor logs for download progress/completion. Verify status changes to "Downloaded".
+4.  **Configure Models to Serve (via UI/API):**
+    *   For the models you want Ray Serve to load (e.g., `nomic-embed-text-v1.5` and maybe one other), click the "Start Serving" button. Verify the status changes to "Serving".
+5.  **Ray Serve Redeploy:**
+    *   Click the "Restart Service" or "Redeploy" button in the UI to trigger a Ray Serve redeploy.
+    *   Check the Ray Serve status via UI or `ray status`/dashboard. It should show the deployment as running.
+    *   Check the unified log file (`logs/vllm_manager.log`) for Ray Serve deployment logs.
+6.  **Verify vLLM API:**
+    *   Use `curl http://localhost:8000/v1/models` (or the UI's Test API button if implemented) to see which models Ray Serve *actually* loaded and is serving. Does this list match the models marked "serve: true" and downloaded?
+7.  **OpenWebUI Integration:**
+    *   Configure OpenWebUI's API endpoint URL to `http://<lxc-ip>:8000`.
+    *   Verify OpenWebUI's model list populates correctly based on the previous step.
+    *   Select different loaded models in OpenWebUI and run inference requests. Verify they work correctly.
+8.  **Dynamic Loading/Unloading:**
+    *   Test toggling "serve" status for models and redeploying. Verify models are loaded/unloaded in Ray Serve and reflected in `/v1/models`.
+    *   (When implemented) Test idle timeout/unloading by leaving a model unused and checking if it is unloaded after the timeout.
+9.  **Multi-GPU Testing:**
+    *   If using multiple GPUs, check the TP size used by Ray Serve/vLLM. Is it appropriate for the largest model being served?
+    *   Monitor GPU utilization (`nvidia-smi` or UI) during inference with different models.
+10. **Log Review:** Check the unified log file (`logs/vllm_manager.log`) for any warnings or errors during testing. Check Ray Serve dashboard and logs for deployment issues.
+puppett
+---
+
+## Open Questions / TODOs
+
+- **Ray Serve Dynamic Loading:** Confirm best practices for dynamic model loading/unloading and idle timeout with Ray Serve and vLLM.
+- **Resource Management:** How to handle VRAM exhaustion if too many models are marked "serve: true"?
+- **Per-Model TP Size:** Ray Serve/vLLM currently uses a global TP size; per-model TP is not supported.
+- **API Authentication:** Add authentication to management API if exposed.
+- **Process Management:** Consider using supervisor or systemd for backend/frontend if needed.
+- **Monitoring:** Enhance monitoring UI for Ray Serve deployments and resource usage.
+- **Testing:** Update this plan as new features are implemented.
+
+---
+
+## References
+
+- [Ray Serve LLM Docs](https://docs.ray.io/en/latest/serve/llm/serving-llms.html)
+- [vLLM Docs](https://docs.vllm.ai/en/latest/)
+- [Ray Serve API](https://docs.ray.io/en/latest/serve/api/index.html)

@@ -125,9 +125,11 @@ print_info "Installing backend dependencies..."
 "${VLLM_HOME}/venv/bin/pip" install --upgrade pip || print_warning "Failed to upgrade pip."
 if [ ! -f "backend/requirements.txt" ]; then
     print_warning "backend/requirements.txt not found. Installing core list."
-    "${VLLM_HOME}/venv/bin/pip" install "fastapi[all]" uvicorn huggingface_hub requests pynvml || { print_error "Failed to install core backend dependencies."; exit 1; }
+    "${VLLM_HOME}/venv/bin/pip" install "fastapi[all]" uvicorn huggingface_hub requests pynvml "ray[serve]" || { print_error "Failed to install core backend dependencies."; exit 1; }
 else
     "${VLLM_HOME}/venv/bin/pip" install -r backend/requirements.txt || { print_error "Failed to install backend requirements from file."; exit 1; }
+    # Ensure Ray Serve is installed even if requirements.txt is present
+    "${VLLM_HOME}/venv/bin/pip" install "ray[serve]" || { print_error "Failed to install Ray Serve."; exit 1; }
 fi
 print_success "Backend dependencies installed."
 # Frontend
@@ -158,32 +160,11 @@ fi
 # Removed active_model.txt creation
 
 
-# --- Setup Systemd Service ---
-print_step "Setting up Systemd Service"
-SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-TEMPLATE_PATH="${VLLM_HOME}/backend/vllm.service.template"
-
-print_info "Checking for template at: ${TEMPLATE_PATH}"
-if [ ! -f "$TEMPLATE_PATH" ]; then print_error "Systemd template NOT FOUND at ${TEMPLATE_PATH}"; ls -la "${VLLM_HOME}/backend"; exit 1; else print_success "Systemd template found."; fi
-
-print_info "Creating systemd service file at ${SERVICE_FILE_PATH}"
-EFFECTIVE_USER=$VLLM_USER
-cat "$TEMPLATE_PATH" | sed -e "s|%USER%|${EFFECTIVE_USER}|g" -e "s|%VLLM_HOME%|${VLLM_HOME}|g" | tee "$SERVICE_FILE_PATH" > /dev/null || { print_error "Failed to create systemd service file."; exit 1; }
-
-print_info "Reloading systemd daemon..."
-systemctl daemon-reload || { print_error "Failed to reload systemd daemon."; exit 1; }
-
-print_success "Systemd service configured."
-if [[ $EUID -ne 0 ]]; then
-    print_warning "IMPORTANT: For the backend API to control the service (start/stop/etc.),"
-    print_warning "the user '${EFFECTIVE_USER}' needs passwordless sudo permission for:"
-    print_warning "'sudo systemctl [start|stop|restart|enable|disable] ${SERVICE_NAME}'"
-    print_warning "Configure this manually using 'sudo visudo'."
-    print_warning "Example line for visudo: ${EFFECTIVE_USER} ALL=(ALL) NOPASSWD: /bin/systemctl start ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl enable ${SERVICE_NAME}, /bin/systemctl disable ${SERVICE_NAME}"
-else
-    print_info "Running as root, passwordless sudo for systemctl commands is not required."
-fi
-
+# --- Start Ray Cluster Head Node ---
+print_step "Starting Ray Cluster Head Node"
+print_info "Starting Ray head node (required for Ray Serve)..."
+"${VLLM_HOME}/venv/bin/ray" start --head --port=6379 || { print_error "Failed to start Ray head node."; exit 1; }
+print_success "Ray head node started."
 
 # --- Start Services ---
 print_step "Starting Backend and Frontend Services"
@@ -217,18 +198,12 @@ else
    print_error "Frontend failed to start. Check logs: ${UNIFIED_LOG_FILE}"
 fi
 
-# Attempt to start vLLM service (launcher will handle loading models)
-print_step "Attempting to Start vLLM Service"
-print_info "Note: Service will only start successfully if models are configured, downloaded, and marked 'serve: true'."
-systemctl start "${SERVICE_NAME}" || print_warning "systemctl start ${SERVICE_NAME} command failed. Check service status and logs."
-sleep 2 # Give service a moment
-systemctl status "${SERVICE_NAME}" --no-pager # Show status after start attempt
-
+# Ray Serve deployments will be launched by the backend (FastAPI) on startup.
 print_step "Setup Complete!"
 echo -e "Backend API should be running at: ${BOLD}http://<server_ip>:${BACKEND_PORT}${NC}"
 echo -e "Frontend Admin UI should be running at: ${BOLD}http://<server_ip>:${FRONTEND_PORT}${NC}"
-if [[ $EUID -ne 0 ]]; then echo -e "Remember to configure passwordless sudo for service control if you haven't already."; fi
-echo -e "Use the Admin UI or 'systemctl status ${SERVICE_NAME}' to check the vLLM service."
-echo -e "Configure models via UI/API, mark them to serve, then use UI or 'systemctl restart ${SERVICE_NAME}' to load them."
+echo -e "Ray Serve is now used for model serving. The OpenAI-compatible endpoint will be available on port 8000 (Ray Serve)."
+echo -e "Use the Admin UI to manage models and monitor Ray Serve deployments."
+echo -e "Configure models via UI/API, and Ray Serve will handle dynamic loading/unloading as needed."
 
 exit 0

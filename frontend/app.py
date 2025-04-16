@@ -134,20 +134,7 @@ def index():
                            config_path="model_config.json" # Still relevant for user info
                            )
 
-@app.route('/service/<action>', methods=['POST'])
-def handle_service_action(action: str):
-    """Handles start, stop, restart, enable, disable actions."""
-    app.logger.info(f"Handling service action request: {action}")
-    # Added restart here
-    valid_actions = ["start", "stop", "restart", "enable", "disable"]
-    if action not in valid_actions:
-        flash(f"Invalid service action requested: {action}", "error")
-        return redirect(url_for('index'))
-    result = call_backend("POST", f"/service/{action}")
-    if result and isinstance(result, dict) and result.get("status") == "ok":
-        flash(f"Service action '{action}' initiated successfully: {result.get('message', '')}", "success")
-    # Error flashing handled by call_backend
-    return redirect(url_for('index'))
+# Systemd service action route removed. Ray Serve is managed automatically.
 
 # Removed handle_activate_model route
 
@@ -203,7 +190,7 @@ def handle_toggle_serve(model_key: str):
     result = call_backend("PUT", f"/config/models/{model_key}/serve", json_data=payload)
 
     if result and isinstance(result, dict) and result.get("status") == "ok":
-        flash(result.get('message', f"Serve status for '{model_key}' updated. Restart service to apply."), "success")
+        flash(result.get('message', f"Serve status for '{model_key}' updated. Ray Serve redeployed."), "success")
     # Error flashing handled by call_backend
     return redirect(url_for('index'))
 
