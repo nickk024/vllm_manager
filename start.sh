@@ -3,8 +3,9 @@
 # start.sh - Setup script for vLLM Backend & Frontend
 
 # --- Configuration ---
-VLLM_USER=$(whoami) # Use current user by default
-VLLM_GROUP=$(id -gn "$VLLM_USER") # Get primary group of the user
+# Script assumes it's run as root in the target LXC environment
+VLLM_USER="root" # Running as root
+VLLM_GROUP="root" # Running as root
 VLLM_HOME_DEFAULT="/opt/vllm" # Default installation directory
 VLLM_HOME="${VLLM_HOME:-$VLLM_HOME_DEFAULT}" # Allow overriding via environment variable
 BACKEND_PORT=8080
@@ -29,7 +30,41 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_step() { echo -e "\n${BOLD}${BLUE}=== $1 ===${NC}"; }
 
-# Function to ask yes/no questions
+# --- Sanity Checks ---
+print_step "Running Sanity Checks"
+if [[ $EUID -ne 0 ]]; then
+  print_error "This script expects to be run as root in the target LXC."
+  # exit 1 # Or prompt? For now, just warn.
+  print_warning "Running as non-root. Some commands might fail."
+  VLLM_USER=$(whoami) # Adjust user if not root
+  VLLM_GROUP=$(id -gn "$VLLM_USER")
+fi
+
+# Check for required commands (sudo not needed if running as root)
+if ! command -v nvidia-smi &> /dev/null; then print_error "NVIDIA drivers not found (nvidia-smi missing)."; exit 1; fi
+print_info "NVIDIA drivers detected."; nvidia-smi -L
+if ! command -v python3 &> /dev/null; then print_error "python3 not found."; exit 1; fi
+if ! python3 -m venv -h &> /dev/null; then print_error "python3-venv module not found."; exit 1; fi
+print_info "Python 3 and venv found."
+if ! command -v rsync &> /dev/null; then print_warning "rsync command not found. Will attempt to install."; fi
+print_info "Checks complete."
+
+
+# --- Optional Cleanup ---
+print_step "Checking for Existing Installation"
+PERFORM_CLEANUP=false
+if [ -d "$VLLM_HOME" ] || [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+    print_warning "An existing installation directory (${VLLM_HOME}) or service file seems to exist."
+    if ask_yes_no "Do you want to remove the existing installation and logs before proceeding?" "N"; then
+        PERFORM_CLEANUP=true
+    else
+        print_info "Proceeding without cleanup. Files might be overwritten."
+    fi
+else
+    print_info "No existing installation found at ${VLLM_HOME} or systemd path."
+fi
+
+# Function to ask yes/no questions (defined here for cleanup prompt)
 ask_yes_no() {
     local prompt="$1"
     local default="${2:-N}" # Default to No if not specified
@@ -53,82 +88,47 @@ ask_yes_no() {
     done
 }
 
-# --- Sanity Checks ---
-print_step "Running Sanity Checks"
-# ... (keep existing sanity checks) ...
-if [[ $EUID -eq 0 ]]; then
-  print_warning "Running as root. It's recommended to run as a user with sudo privileges."
-fi
-if ! command -v sudo &> /dev/null; then print_error "sudo command not found."; exit 1; fi
-if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
-    print_warning "Current user might not have passwordless sudo. You might be prompted for password."
-    print_warning "Passwordless sudo for 'systemctl [...] ${SERVICE_NAME}' is required for API control."
-fi
-if ! command -v nvidia-smi &> /dev/null; then print_error "NVIDIA drivers not found (nvidia-smi missing)."; exit 1; fi
-print_info "NVIDIA drivers detected."; nvidia-smi -L
-if ! command -v python3 &> /dev/null; then print_error "python3 not found."; exit 1; fi
-if ! python3 -m venv -h &> /dev/null; then print_error "python3-venv module not found."; exit 1; fi
-print_info "Python 3 and venv found."
-if ! command -v rsync &> /dev/null; then print_warning "rsync command not found. Will attempt to install."; fi
-print_info "Checks complete."
-
-# --- Optional Cleanup ---
-print_step "Checking for Existing Installation"
-PERFORM_CLEANUP=false
-if [ -d "$VLLM_HOME" ] || [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
-    print_warning "An existing installation directory (${VLLM_HOME}) or service file seems to exist."
-    if ask_yes_no "Do you want to remove the existing installation and logs before proceeding?" "N"; then
-        PERFORM_CLEANUP=true
-    else
-        print_info "Proceeding without cleanup. Files might be overwritten."
-    fi
-else
-    print_info "No existing installation found at ${VLLM_HOME} or systemd path."
-fi
 
 if [ "$PERFORM_CLEANUP" = true ]; then
-    print_step "Performing Cleanup (Requires sudo)"
+    print_step "Performing Cleanup"
     print_info "Stopping service ${SERVICE_NAME}..."
-    sudo systemctl stop "$SERVICE_NAME" # Ignore errors if service doesn't exist
+    systemctl stop "$SERVICE_NAME" # No sudo needed if root
     print_info "Disabling service ${SERVICE_NAME}..."
-    sudo systemctl disable "$SERVICE_NAME" # Ignore errors
+    systemctl disable "$SERVICE_NAME" # No sudo needed if root
     SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
     if [ -f "$SERVICE_FILE_PATH" ]; then
         print_info "Removing service file ${SERVICE_FILE_PATH}..."
-        sudo rm -f "$SERVICE_FILE_PATH" || print_warning "Failed to remove service file."
+        rm -f "$SERVICE_FILE_PATH" || print_warning "Failed to remove service file." # No sudo
     fi
     print_info "Reloading systemd daemon..."
-    sudo systemctl daemon-reload || print_warning "Failed to reload systemd daemon."
+    systemctl daemon-reload || print_warning "Failed to reload systemd daemon." # No sudo
     print_info "Removing installation directory ${VLLM_HOME}..."
-    sudo rm -rf "$VLLM_HOME" || print_warning "Failed to remove installation directory."
+    rm -rf "$VLLM_HOME" || print_warning "Failed to remove installation directory." # No sudo
     print_info "Removing log directory ${LOG_DIR}..."
     rm -rf "$LOG_DIR" || print_warning "Failed to remove log directory."
-    # Warn about potential lingering processes if needed
     print_warning "Cleanup might not stop manually started backend/frontend processes."
     print_success "Cleanup finished."
 fi
 
 
 # --- System Dependencies ---
-print_step "Installing System Dependencies (Requires sudo)"
-sudo apt-get update -q || { print_error "apt-get update failed."; exit 1; }
-sudo apt-get install -y -q build-essential git wget curl jq rsync python3-dev python3-venv || { print_error "Failed to install essential packages."; exit 1; }
+print_step "Installing System Dependencies"
+apt-get update -q || { print_error "apt-get update failed."; exit 1; }
+apt-get install -y -q build-essential git wget curl jq rsync python3-dev python3-venv || { print_error "Failed to install essential packages."; exit 1; }
 print_success "System dependencies installed."
 
 # --- Create Directories & Copy Project Files ---
-# (This section now runs after potential cleanup)
 print_step "Creating Installation Directory: ${VLLM_HOME}"
-sudo mkdir -p "$VLLM_HOME" || { print_error "Failed to create directory $VLLM_HOME"; exit 1; }
-sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to change ownership of $VLLM_HOME"; exit 1; }
+mkdir -p "$VLLM_HOME" || { print_error "Failed to create directory $VLLM_HOME"; exit 1; }
+chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to change ownership of $VLLM_HOME"; exit 1; } # Keep chown for consistency if run as non-root later
 print_success "Directory created and ownership set."
 
 print_step "Copying Project Files to ${VLLM_HOME}"
 rsync -a --delete --exclude='.git/' --exclude='legacy/' --exclude='logs/' --exclude='*venv/' --exclude='__pycache__/' "${SCRIPT_DIR}/" "${VLLM_HOME}/" || { print_error "Failed to copy project files using rsync."; exit 1; }
-sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to set final ownership of $VLLM_HOME"; exit 1; }
+chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to set final ownership of $VLLM_HOME"; exit 1; }
 print_success "Project files copied."
 
 # --- Create Log Directory ---
-# (This section now runs after potential cleanup)
 print_step "Creating Log Directory: ${LOG_DIR}"
 mkdir -p "$LOG_DIR" || { print_error "Failed to create log directory $LOG_DIR"; exit 1; }
 chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR" || print_warning "Could not set ownership of log directory ${LOG_DIR}"
@@ -147,12 +147,10 @@ print_info "Successfully changed working directory to $(pwd)"
 
 # --- Setup Python Virtual Environments ---
 print_step "Setting up Python Virtual Environments (in $(pwd))"
-# Venvs are inside VLLM_HOME, so they would have been removed by cleanup if requested
 if [ ! -d "venv" ]; then
     python3 -m venv venv || { print_error "Failed to create backend virtual environment."; exit 1; }
     print_info "Backend virtual environment created."
 else
-    # This case should only happen if cleanup wasn't performed and venv existed
     print_info "Backend virtual environment already exists."
 fi
 if [ ! -d "frontend_venv" ]; then
@@ -166,34 +164,31 @@ fi
 print_step "Installing Python Dependencies"
 # Backend dependencies
 print_info "Installing backend dependencies..."
-source "${VLLM_HOME}/venv/bin/activate" || { print_error "Failed to activate backend venv."; exit 1; }
-pip install --upgrade pip || print_warning "Failed to upgrade pip."
+# Use absolute path to pip in venv
+"${VLLM_HOME}/venv/bin/pip" install --upgrade pip || print_warning "Failed to upgrade pip."
 if [ ! -f "backend/requirements.txt" ]; then
     print_warning "backend/requirements.txt not found. Installing core list."
-    pip install "fastapi[all]" uvicorn huggingface_hub requests pynvml || { print_error "Failed to install core backend dependencies."; deactivate; exit 1; }
+    "${VLLM_HOME}/venv/bin/pip" install "fastapi[all]" uvicorn huggingface_hub requests pynvml || { print_error "Failed to install core backend dependencies."; exit 1; }
 else
-    pip install -r backend/requirements.txt || { print_error "Failed to install backend requirements from file."; deactivate; exit 1; }
+    "${VLLM_HOME}/venv/bin/pip" install -r backend/requirements.txt || { print_error "Failed to install backend requirements from file."; exit 1; }
 fi
-deactivate
 print_success "Backend dependencies installed."
 
 # Frontend dependencies
 print_info "Installing frontend dependencies..."
-source "${VLLM_HOME}/frontend_venv/bin/activate" || { print_error "Failed to activate frontend venv."; exit 1; }
-pip install --upgrade pip || print_warning "Failed to upgrade pip."
+"${VLLM_HOME}/frontend_venv/bin/pip" install --upgrade pip || print_warning "Failed to upgrade pip."
 if [ ! -f "frontend/requirements.txt" ]; then
      print_warning "frontend/requirements.txt not found. Installing core list."
-     pip install Flask requests || { print_error "Failed to install core frontend dependencies."; deactivate; exit 1; }
+     "${VLLM_HOME}/frontend_venv/bin/pip" install Flask requests || { print_error "Failed to install core frontend dependencies."; exit 1; }
 else
-    pip install -r frontend/requirements.txt || { print_error "Failed to install frontend requirements from file."; deactivate; exit 1; }
+    "${VLLM_HOME}/frontend_venv/bin/pip" install -r frontend/requirements.txt || { print_error "Failed to install frontend requirements from file."; exit 1; }
 fi
-deactivate
 print_success "Frontend dependencies installed."
 
 # --- Setup Systemd Service ---
-print_step "Setting up Systemd Service (Requires sudo)"
+print_step "Setting up Systemd Service"
 SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-TEMPLATE_PATH="${VLLM_HOME}/backend/vllm.service.template" # Path relative to VLLM_HOME now
+TEMPLATE_PATH="${VLLM_HOME}/backend/vllm.service.template"
 
 print_info "Checking for template at: ${TEMPLATE_PATH}"
 if [ ! -f "$TEMPLATE_PATH" ]; then
@@ -206,31 +201,35 @@ else
 fi
 
 print_info "Creating systemd service file at ${SERVICE_FILE_PATH}"
-sudo sed -e "s|%USER%|${VLLM_USER}|g" \
-         -e "s|%VLLM_HOME%|${VLLM_HOME}|g" \
-         "$TEMPLATE_PATH" | sudo tee "$SERVICE_FILE_PATH" > /dev/null || { print_error "Failed to create systemd service file."; exit 1; }
+# Use cat and pipe to tee instead of sed for simplicity if only replacing known placeholders
+# Ensure VLLM_USER is correctly substituted if script wasn't run as root initially
+EFFECTIVE_USER=$VLLM_USER # Use the determined user
+cat "$TEMPLATE_PATH" | sed -e "s|%USER%|${EFFECTIVE_USER}|g" -e "s|%VLLM_HOME%|${VLLM_HOME}|g" | tee "$SERVICE_FILE_PATH" > /dev/null || { print_error "Failed to create systemd service file."; exit 1; }
 
 print_info "Reloading systemd daemon..."
-sudo systemctl daemon-reload || { print_error "Failed to reload systemd daemon."; exit 1; }
+systemctl daemon-reload || { print_error "Failed to reload systemd daemon."; exit 1; } # No sudo needed
 
 print_success "Systemd service configured."
-print_warning "IMPORTANT: For the backend API to control the service (start/stop/etc.),"
-print_warning "the user '${VLLM_USER}' needs passwordless sudo permission for:"
-print_warning "'sudo systemctl [start|stop|restart|enable|disable] ${SERVICE_NAME}'"
-print_warning "Configure this manually using 'sudo visudo'."
-print_warning "Example line for visudo: ${VLLM_USER} ALL=(ALL) NOPASSWD: /bin/systemctl start ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl enable ${SERVICE_NAME}, /bin/systemctl disable ${SERVICE_NAME}"
+# Remove sudo warning if running as root
+if [[ $EUID -ne 0 ]]; then
+    print_warning "IMPORTANT: For the backend API to control the service (start/stop/etc.),"
+    print_warning "the user '${EFFECTIVE_USER}' needs passwordless sudo permission for:"
+    print_warning "'sudo systemctl [start|stop|restart|enable|disable] ${SERVICE_NAME}'"
+    print_warning "Configure this manually using 'sudo visudo'."
+    print_warning "Example line for visudo: ${EFFECTIVE_USER} ALL=(ALL) NOPASSWD: /bin/systemctl start ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl enable ${SERVICE_NAME}, /bin/systemctl disable ${SERVICE_NAME}"
+else
+    print_info "Running as root, passwordless sudo for systemctl commands is not required."
+fi
 
 
 # --- Start Services ---
 print_step "Starting Backend and Frontend Services"
 
-# Start Backend (uvicorn) in the background
+# Start Backend (uvicorn) in the background using absolute paths
 print_info "Starting FastAPI backend on port ${BACKEND_PORT}..."
-source "${VLLM_HOME}/venv/bin/activate" || { print_error "Failed to activate backend venv."; exit 1; }
 export VLLM_LOG_DIR="${LOG_DIR}" # Pass log dir via env var
-nohup uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > "${LOG_DIR}/backend_stdout.log" 2>&1 &
+nohup "${VLLM_HOME}/venv/bin/python" -m uvicorn backend.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --forwarded-allow-ips '*' > "${LOG_DIR}/backend_stdout.log" 2>&1 &
 BACKEND_PID=$!
-deactivate
 unset VLLM_LOG_DIR
 sleep 2
 if ps -p $BACKEND_PID > /dev/null; then
@@ -239,14 +238,12 @@ else
    print_error "Backend failed to start. Check logs: ${LOG_DIR}/backend_stdout.log and ${LOG_DIR}/vllm_backend.log"
 fi
 
-# Start Frontend (Flask) in the background
+# Start Frontend (Flask) in the background using absolute paths
 print_info "Starting Flask frontend on port ${FRONTEND_PORT}..."
-source "${VLLM_HOME}/frontend_venv/bin/activate" || { print_error "Failed to activate frontend venv."; exit 1; }
 export VLLM_LOG_DIR="${LOG_DIR}" # Pass log dir via env var
-export FLASK_APP=frontend/app.py
-nohup flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > "${LOG_DIR}/frontend_stdout.log" 2>&1 &
+export FLASK_APP=frontend/app.py # Relative path should be okay here as we cd'd into VLLM_HOME
+nohup "${VLLM_HOME}/frontend_venv/bin/python" -m flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > "${LOG_DIR}/frontend_stdout.log" 2>&1 &
 FRONTEND_PID=$!
-deactivate
 unset VLLM_LOG_DIR
 sleep 1
 if ps -p $FRONTEND_PID > /dev/null; then
@@ -258,7 +255,10 @@ fi
 print_step "Setup Complete!"
 echo -e "Backend API should be running at: ${BOLD}http://<server_ip>:${BACKEND_PORT}${NC}"
 echo -e "Frontend Admin UI should be running at: ${BOLD}http://<server_ip>:${FRONTEND_PORT}${NC}"
-echo -e "Remember to configure passwordless sudo for service control if you haven't already."
-echo -e "Use 'sudo systemctl status ${SERVICE_NAME}' to check the vLLM service status (it may need to be started manually or via the UI)."
+# Adjust sudo warning based on execution user
+if [[ $EUID -ne 0 ]]; then
+    echo -e "Remember to configure passwordless sudo for service control if you haven't already."
+fi
+echo -e "Use 'systemctl status ${SERVICE_NAME}' to check the vLLM service status (it may need to be started manually or via the UI)."
 
 exit 0
