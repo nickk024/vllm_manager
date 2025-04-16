@@ -16,6 +16,8 @@ WorkingDirectory=%VLLM_HOME%
 Environment="VLLM_HOME=%VLLM_HOME%"
 # Centralized cache location for HuggingFace models
 Environment="HF_HOME=%VLLM_HOME%/.cache/huggingface"
+# Set PYTHONPATH to the installation directory to help with relative imports in utils
+Environment="PYTHONPATH=%VLLM_HOME%"
 # Add other necessary environment variables like CUDA_VISIBLE_DEVICES if required
 # Example: Environment="CUDA_VISIBLE_DEVICES=0,1"
 
