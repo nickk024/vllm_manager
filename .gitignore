@@ -1,62 +1,30 @@
-# Python-related files
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
+*.pyc
+*.pyo
+*.pyd
+*build*/
+*dist*/
 *.egg-info/
-.installed.cfg
 *.egg
 
-# Virtual environments
+# Virtual Environments
 venv/
-ENV/
-env/
+frontend_venv/
+.venv/
 
-# Editors & IDEs
+# Logs
+logs/*.log
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Configuration Files (Optional - uncomment if you don't want to commit these)
+# config/model_config.json
+# config/active_model.txt
+
+# IDE/Editor files
 .vscode/
 .idea/
-*.sublime-workspace
-*.sublime-project
-.DS_Store
-.ipynb_checkpoints
-
-# Logs and databases
-*.log
-*.sqlite
-*.db
-
-# vLLM specific
-models/
-*.bin
-*.pt
-*.gguf
-*.safetensors
-
-# Downloaded models and cache
-models/
-.cache/
-.vllm_cache/
-huggingface/
-
-# Runtime files
-*.pid
-*.socket
-
-# Sensitive data
-.env
-*.key
-*.pem
-*.crt

@@ -1,0 +1,38 @@
+[Unit]
+Description=vLLM Dynamic API Server (Managed by Backend)
+After=network.target
+# Add nvidia-persistenced.service if needed: Requires=nvidia-persistenced.service
+
+[Service]
+Type=simple
+# User and Group should be the user running the backend/vLLM process
+User=%USER%
+# Group=%GROUP% # Optional: Specify group if needed
+
+WorkingDirectory=%VLLM_HOME%
+
+# Environment variables needed by the launcher and vLLM
+Environment="VLLM_HOME=%VLLM_HOME%"
+Environment="HF_HOME=%VLLM_HOME%/.cache/huggingface" # Centralized cache
+# Add other necessary environment variables like CUDA_VISIBLE_DEVICES if required
+# Environment="CUDA_VISIBLE_DEVICES=0,1"
+
+# Execute the launcher script using the virtual environment's python
+# The launcher reads active_model.txt and model_config.json to get dynamic args
+ExecStart=%VLLM_HOME%/venv/bin/python %VLLM_HOME%/backend/utils/vllm_launcher.py
+# Removed fixed --tensor-parallel-size, --port etc. Launcher handles defaults or reads from config/args
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s # Increased restart delay slightly
+
+# Resource limits (Optional but recommended)
+# LimitNOFILE=65536 # Increase open file limit
+# LimitNPROC=131072 # Increase process limit
+
+# Timeout settings (Optional)
+# TimeoutStartSec=300 # Allow more time for model loading on start
+# TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

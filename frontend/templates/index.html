@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vLLM Admin Dashboard</title>
+    <style>
+        body { font-family: sans-serif; line-height: 1.6; padding: 20px; background-color: #f4f4f4; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-active { color: green; font-weight: bold; }
+        .status-inactive { color: red; font-weight: bold; }
+        .status-enabled { color: darkcyan; }
+        .status-disabled { color: grey; }
+        .status-downloaded { color: green; }
+        .status-not-downloaded { color: orange; }
+        .action-button { background-color: #5cb85c; color: white; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; font-size: 0.9em; }
+        .action-button-danger { background-color: #d9534f; }
+        .action-button-warning { background-color: #f0ad4e; }
+        .action-button-info { background-color: #5bc0de; }
+        .action-button-activate { background-color: #337ab7; }
+        .action-button:hover { opacity: 0.9; }
+        .action-button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash-success { background-color: #dff0d8; color: #3c763d; border: 1px solid #d6e9c6; }
+        .flash-error { background-color: #f2dede; color: #a94442; border: 1px solid #ebccd1; }
+        .monitoring-section { background-color: #eef; padding: 15px; border-radius: 5px; margin-top: 20px; }
+        .monitoring-section h3 { margin-top: 0; }
+        .gpu-stats { margin-bottom: 10px; }
+        .system-stats { margin-top: 10px; }
+        pre { background-color: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; }
+        .active-model { font-weight: bold; color: #337ab7; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>vLLM Admin Dashboard</h1>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="flash-message flash-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Service Status and Control -->
+        <h2>Service Status & Control</h2>
+        <p>
+            Status:
+            <span class="status-{{ 'active' if service_status == 'active' else 'inactive' }}">
+                {{ service_status | capitalize }}
+            </span>
+            | Enabled at Boot:
+            <span class="status-{{ service_enabled }}">
+                {{ service_enabled | capitalize }}
+            </span>
+             | Active Model Key: <span class="active-model">{{ active_model_key if active_model_key else 'N/A' }}</span>
+        </p>
+        <form action="{{ url_for('handle_service_action', action='start') }}" method="post" style="display: inline;">
+            <button type="submit" class="action-button" {% if service_status == 'active' %}disabled title="Service already active"{% endif %}>Start</button>
+        </form>
+        <form action="{{ url_for('handle_service_action', action='stop') }}" method="post" style="display: inline;">
+            <button type="submit" class="action-button action-button-danger" {% if service_status != 'active' %}disabled title="Service not active"{% endif %}>Stop</button>
+        </form>
+        <!-- Removed generic restart, use Activate button below -->
+        |
+        <form action="{{ url_for('handle_service_action', action='enable') }}" method="post" style="display: inline;">
+            <button type="submit" class="action-button action-button-info" {% if service_enabled == 'enabled' %}disabled title="Service already enabled"{% endif %}>Enable Boot Start</button>
+        </form>
+        <form action="{{ url_for('handle_service_action', action='disable') }}" method="post" style="display: inline;">
+            <button type="submit" class="action-button action-button-danger" {% if service_enabled != 'enabled' %}disabled title="Service not enabled"{% endif %}>Disable Boot Start</button>
+        </form>
+
+        <!-- Configured Models -->
+        <h2>Configured Models</h2>
+        {% if models %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name (Config Key)</th>
+                        <th>Model ID</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for model in models %}
+                    <tr>
+                        <td>
+                            {{ model.name }}
+                            {% if model.name == active_model_key %} <span class="active-model">(Active)</span> {% endif %}
+                        </td>
+                        <td>{{ model.model_id }}</td>
+                        <td>
+                            <span class="status-{{ 'downloaded' if model.downloaded else 'not-downloaded' }}">
+                                {{ 'Downloaded' if model.downloaded else 'Not Downloaded' }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if not model.downloaded %}
+                            <form action="{{ url_for('handle_download_model', model_name=model.name) }}" method="post" style="display: inline;">
+                                <button type="submit" class="action-button action-button-info">Download</button>
+                            </form>
+                            {% endif %}
+                            {% if model.downloaded %}
+                                <form action="{{ url_for('handle_activate_model', model_key=model.name) }}" method="post" style="display: inline;">
+                                    <button type="submit" class="action-button action-button-activate" {% if model.name == active_model_key and service_status == 'active' %}disabled title="Model already active"{% endif %}>Activate</button>
+                                </form>
+                            {% else %}
+                                <button class="action-button action-button-activate" disabled title="Download model first">Activate</button>
+                            {% endif %}
+                            <!-- Add Delete button? -->
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>No models found in configuration (<code>{{ config_path }}</code>). Add models via API or manually.</p>
+        {% endif %}
+
+        <!-- Monitoring Stats -->
+        <h2>Monitoring</h2>
+        {% if monitoring_stats %}
+            <div class="monitoring-section">
+                <h3>Live Stats ({{ monitoring_stats.timestamp }})</h3>
+                <div class="gpu-stats">
+                    <h4>GPU Stats</h4>
+                    {% if monitoring_stats.gpu_stats %}
+                        {% for gpu in monitoring_stats.gpu_stats %}
+                            <p>
+                                <strong>GPU {{ gpu.gpu_id }} ({{ gpu.name }}):</strong>
+                                Temp: {{ gpu.temperature_c }}°C |
+                                Util: {{ gpu.gpu_utilization_pct | round(1) }}% |
+                                Mem: {{ gpu.memory_used_mb | round(0) }} / {{ gpu.memory_total_mb | round(0) }} MB ({{ gpu.memory_utilization_pct | round(1) }}%)
+                            </p>
+                        {% endfor %}
+                    {% else %}
+                        <p>No GPU stats available (nvidia-smi/NVML might not be working or no GPUs found).</p>
+                    {% endif %}
+                </div>
+                <hr>
+                <div class="system-stats">
+                    <h4>System Stats</h4>
+                    {% if monitoring_stats.system_stats %}
+                        <p>
+                            <strong>CPU Util:</strong> {{ monitoring_stats.system_stats.cpu_utilization_pct | round(1) if monitoring_stats.system_stats.cpu_utilization_pct is not none else 'N/A' }}% |
+                            <strong>Memory:</strong>
+                            {{ monitoring_stats.system_stats.memory_used_mb | round(0) if monitoring_stats.system_stats.memory_used_mb is not none else 'N/A' }} /
+                            {{ monitoring_stats.system_stats.memory_total_mb | round(0) if monitoring_stats.system_stats.memory_total_mb is not none else 'N/A' }} MB
+                            ({{ monitoring_stats.system_stats.memory_utilization_pct | round(1) if monitoring_stats.system_stats.memory_utilization_pct is not none else 'N/A' }}%)
+                        </p>
+                    {% else %}
+                        <p>System stats (CPU/Memory) not available.</p>
+                    {% endif %}
+                </div>
+            </div>
+        {% else %}
+            <p>Could not retrieve monitoring stats from the backend.</p>
+        {% endif %}
+
+    </div>
+</body>
+</html>
