@@ -42,15 +42,12 @@ else:
      app.logger.warning("--- Flask Logging configured (Console only) ---")
 # --- End Logging Configuration ---
 
-BACKEND_API_URL = os.environ.get("VLLM_BACKEND_URL", "http://localhost:8080/api/v1")
+BACKEND_API_URL = os.environ.get("VLLM_BACKEND_URL", "http://localhost:8080/api/v1/manage") # Point to management prefix
 
 def call_backend(method: str, endpoint: str, params: dict = None, json_data=None) -> dict | list | None:
-    """
-    Helper function to call the backend API.
-    Returns dict, list (for popular models), or None on error.
-    """
-    url = f"{BACKEND_API_URL}{endpoint}"
-    action_description = f"{method} {endpoint}"
+    """Helper function to call the backend management API."""
+    url = f"{BACKEND_API_URL}{endpoint}" # Endpoint should start with / (e.g., /service/status)
+    action_description = f"{method} {url}" # Log full URL
     try:
         app.logger.info(f"Calling backend: {action_description} with params: {params}, data: {json_data}")
         response = requests.request(method, url, params=params, json=json_data, timeout=30)
@@ -61,8 +58,7 @@ def call_backend(method: str, endpoint: str, params: dict = None, json_data=None
         try:
             response_json = response.json()
             app.logger.info(f"Backend call successful ({action_description}): {response_json}")
-            # Return the raw JSON response (could be dict or list)
-            return response_json
+            return response_json # Return raw JSON (list or dict)
         except requests.exceptions.JSONDecodeError:
              app.logger.warning(f"Backend call successful ({action_description}) but response was not JSON: {response.text[:100]}...")
              flash(f"Received non-JSON response from backend for {action_description}", "warning")
@@ -90,19 +86,19 @@ def call_backend(method: str, endpoint: str, params: dict = None, json_data=None
 def index():
     """Dashboard showing status, models, popular models, and monitoring."""
     app.logger.info("Accessing index route '/'")
+    # Use management API endpoints
     status_data = call_backend("GET", "/service/status")
     monitoring_data = call_backend("GET", "/monitoring/stats")
+    popular_models_data = call_backend("GET", "/models/popular") # Still uses management prefix
 
     service_status = "Error Fetching"; service_enabled = "Error Fetching"
-    active_model_key = "Error Fetching"; models = []; stats = None
-    popular_models = []
+    models = []; stats = None; popular_models = []
     total_vram_gb = 0.0
 
     if isinstance(status_data, dict):
         service_status = status_data.get("service_status", "Unknown")
         service_enabled = status_data.get("service_enabled", "Unknown")
-        active_model_key = status_data.get("active_model_key", "N/A")
-        models = status_data.get("configured_models", [])
+        models = status_data.get("configured_models", []) # This list now has ConfiguredModelInfo structure
     else: app.logger.warning("Failed to fetch service status from backend.")
 
     if isinstance(monitoring_data, dict):
@@ -129,37 +125,31 @@ def index():
     return render_template('index.html',
                            service_status=service_status,
                            service_enabled=service_enabled,
-                           active_model_key=active_model_key,
-                           models=models,
+                           # active_model_key removed
+                           models=models, # List of ConfiguredModelInfo
                            popular_models=popular_models,
                            total_vram_gb=total_vram_gb,
                            configured_model_ids=configured_model_ids,
                            monitoring_stats=stats,
-                           config_path="model_config.json"
+                           config_path="model_config.json" # Still relevant for user info
                            )
 
 @app.route('/service/<action>', methods=['POST'])
 def handle_service_action(action: str):
+    """Handles start, stop, restart, enable, disable actions."""
     app.logger.info(f"Handling service action request: {action}")
-    valid_actions = ["start", "stop", "enable", "disable"]
+    # Added restart here
+    valid_actions = ["start", "stop", "restart", "enable", "disable"]
     if action not in valid_actions:
         flash(f"Invalid service action requested: {action}", "error")
         return redirect(url_for('index'))
     result = call_backend("POST", f"/service/{action}")
-    if result and result.get("status") == "ok":
+    if result and isinstance(result, dict) and result.get("status") == "ok":
         flash(f"Service action '{action}' initiated successfully: {result.get('message', '')}", "success")
+    # Error flashing handled by call_backend
     return redirect(url_for('index'))
 
-@app.route('/activate/<model_key>', methods=['POST'])
-def handle_activate_model(model_key: str):
-    app.logger.info(f"Handling activation request for model: {model_key}")
-    if not model_key:
-         flash("No model key provided for activation.", "error")
-         return redirect(url_for('index'))
-    result = call_backend("POST", f"/service/activate/{model_key}")
-    if result and result.get("status") == "ok":
-        flash(f"Activation for model '{model_key}' initiated successfully. {result.get('message', '')}", "success")
-    return redirect(url_for('index'))
+# Removed handle_activate_model route
 
 @app.route('/download/<model_name>', methods=['POST'])
 def handle_download_model(model_name: str):
@@ -172,54 +162,49 @@ def handle_download_model(model_name: str):
     force_download = request.form.get('force') == 'on'
     payload = {"models": [model_name], "token": hf_token if hf_token else None, "force": force_download}
     result = call_backend("POST", "/models/download", json_data=payload)
-    if result and result.get("status") == "ok":
+    if result and isinstance(result, dict) and result.get("status") == "ok":
         flash(f"Download task for model '{model_name}' started in background.", "success")
     return redirect(url_for('index'))
 
-# Renamed route from handle_add_popular_model
-@app.route('/download_popular/<path:model_id>', methods=['POST'])
-def handle_download_popular_model(model_id: str):
-    """Adds a popular model to config and immediately triggers its download."""
-    app.logger.info(f"Handling request to add & download popular model ID: {model_id}")
+# Renamed route
+@app.route('/add_model/<path:model_id>', methods=['POST'])
+def handle_add_model(model_id: str):
+    """Handles request to add a popular model (by ID) to the config."""
+    app.logger.info(f"Handling request to add popular model ID: {model_id}")
     if not model_id:
-         flash("No model ID provided.", "error")
+         flash("No model ID provided for adding.", "error")
          return redirect(url_for('index'))
+    payload = {"model_ids": [model_id]}
+    result = call_backend("POST", "/config/models", json_data=payload)
+    if result and isinstance(result, dict) and result.get("status") == "ok":
+        message = result.get('message', f"Request to add model ID '{model_id}' processed.")
+        flash(message, "success")
+        # Optional: Trigger download automatically? No, keep separate for now.
+        # added_keys = result.get("details", {}).get("added_keys", [])
+        # if added_keys: handle_download_model(added_keys[0]) # Needs adjustment
+    elif result and isinstance(result, dict) and result.get("status") == "skipped":
+         flash(result.get('message', f"Model '{model_id}' was already configured."), "warning")
+    # Error flashing handled by call_backend
+    return redirect(url_for('index'))
 
-    # Step 1: Add the model to the configuration
-    add_payload = {"model_ids": [model_id]}
-    add_result = call_backend("POST", "/config/models", json_data=add_payload)
-
-    if not add_result or add_result.get("status") == "error":
-        # Error already flashed by call_backend
-        flash(f"Failed to add model '{model_id}' to configuration.", "error")
-        return redirect(url_for('index'))
-
-    if add_result.get("status") == "skipped":
-         flash(f"Model '{model_id}' was already configured. Download not triggered.", "warning")
+@app.route('/toggle_serve/<model_key>', methods=['POST'])
+def handle_toggle_serve(model_key: str):
+    """Handles toggling the serve status for a configured model."""
+    app.logger.info(f"Handling request to toggle serve status for model key: {model_key}")
+    if not model_key:
+         flash("No model key provided for toggling serve status.", "error")
          return redirect(url_for('index'))
+    # Determine the desired state (toggle: if current is true, send false, vice versa)
+    # Requires fetching current state first - simpler to pass desired state from form
+    serve_action = request.form.get('serve_action', 'false') # Default to disabling if form value missing
+    serve_bool = serve_action.lower() == 'true'
 
-    # Step 2: If added successfully, trigger the download using the returned key
-    added_keys = add_result.get("details", {}).get("added_keys", [])
-    if not added_keys:
-         flash(f"Model '{model_id}' was processed but no new key was returned from backend. Cannot trigger download.", "error")
-         app.logger.error(f"Backend /config/models endpoint succeeded but did not return added_keys for {model_id}")
-         return redirect(url_for('index'))
+    payload = {"serve": serve_bool}
+    result = call_backend("PUT", f"/config/models/{model_key}/serve", json_data=payload)
 
-    new_model_key = added_keys[0] # Get the key generated by the backend
-    app.logger.info(f"Model '{model_id}' added to config with key '{new_model_key}'. Triggering download.")
-
-    # Optional: Get HF Token from form if needed for download
-    hf_token = request.form.get('hf_token')
-    force_download = request.form.get('force') == 'on' # Should probably default to False here
-    download_payload = {"models": [new_model_key], "token": hf_token if hf_token else None, "force": force_download}
-    download_result = call_backend("POST", "/models/download", json_data=download_payload)
-
-    if download_result and download_result.get("status") == "ok":
-        flash(f"Model '{new_model_key}' added to config and download task started in background.", "success")
-    else:
-         # Add config succeeded, but download trigger failed
-         flash(f"Model '{new_model_key}' added to config, but failed to start download task.", "error")
-
+    if result and isinstance(result, dict) and result.get("status") == "ok":
+        flash(result.get('message', f"Serve status for '{model_key}' updated. Restart service to apply."), "success")
+    # Error flashing handled by call_backend
     return redirect(url_for('index'))
 
 

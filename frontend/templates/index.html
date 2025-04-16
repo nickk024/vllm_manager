@@ -10,37 +10,41 @@
         h1, h2, h3 { color: #333; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-top: 25px; }
         h1 { margin-top: 0; }
         table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-        th, td { padding: 10px; border: 1px solid #ddd; text-align: left; vertical-align: top; }
+        th, td { padding: 8px 10px; border: 1px solid #ddd; text-align: left; vertical-align: top; }
         th { background-color: #f2f2f2; }
         .status-active { color: green; font-weight: bold; }
         .status-inactive { color: red; font-weight: bold; }
+        .status-failed { color: orange; font-weight: bold; } /* Added failed status */
         .status-enabled { color: darkcyan; }
         .status-disabled { color: grey; }
         .status-downloaded { color: green; }
         .status-not-downloaded { color: orange; }
-        .action-button { background-color: #5cb85c; color: white; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; font-size: 0.9em; }
+        .status-serving { color: green; }
+        .status-not-serving { color: grey; }
+        .action-button { background-color: #5cb85c; color: white; padding: 6px 10px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; margin: 2px; font-size: 0.85em; }
         .action-button-danger { background-color: #d9534f; }
         .action-button-warning { background-color: #f0ad4e; }
         .action-button-info { background-color: #5bc0de; }
-        /* Changed Add button style/name */
-        .action-button-download-pop { background-color: #5bc0de; } /* Use info color for download */
-        .action-button-activate { background-color: #337ab7; }
+        .action-button-add { background-color: #777; }
+        .action-button-toggle { background-color: #777; }
+        /* Removed activate style */
         .action-button:hover { opacity: 0.9; }
         .action-button:disabled { background-color: #ccc; cursor: not-allowed; opacity: 0.6; }
         .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
         .flash-success { background-color: #dff0d8; color: #3c763d; border: 1px solid #d6e9c6; }
         .flash-error { background-color: #f2dede; color: #a94442; border: 1px solid #ebccd1; }
-        .flash-warning { background-color: #fcf8e3; color: #8a6d3b; border: 1px solid #faebcc; } /* Added warning style */
+        .flash-warning { background-color: #fcf8e3; color: #8a6d3b; border: 1px solid #faebcc; }
         .monitoring-section { background-color: #eef; padding: 15px; border-radius: 5px; margin-top: 20px; }
         .monitoring-section h3 { margin-top: 0; border-bottom: none; }
         .gpu-stats { margin-bottom: 10px; }
         .system-stats { margin-top: 10px; }
         pre { background-color: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; }
-        .active-model { font-weight: bold; color: #337ab7; }
+        /* Removed active-model style */
         .fits-vram { color: green; }
         .no-fit-vram { color: #aaa; }
-        .model-id-code { font-family: monospace; font-size: 0.9em; color: #555; }
+        .model-id-code { font-family: monospace; font-size: 0.9em; color: #555; word-break: break-all; }
         .note { font-size: 0.9em; color: #777; }
+        .restart-note { margin-top: 10px; padding: 10px; background-color: #fff8dc; border: 1px solid #fafaae; border-radius: 4px; }
     </style>
 </head>
 <body>
@@ -57,31 +61,38 @@
         {% endwith %}
 
         <!-- Service Status and Control -->
-        <h2>Service Status & Control</h2>
+        <h2>vLLM Service Control</h2>
         <p>
-            Status:
-            <span class="status-{{ 'active' if service_status == 'active' else 'inactive' }}">
+            Service Status:
+            <span class="status-{{ service_status }}">
                 {{ service_status | capitalize }}
             </span>
             | Enabled at Boot:
             <span class="status-{{ service_enabled }}">
                 {{ service_enabled | capitalize }}
             </span>
-             | Active Model Key: <span class="active-model">{{ active_model_key if active_model_key else 'N/A' }}</span>
+             <!-- Removed Active Model Key display -->
         </p>
         <form action="{{ url_for('handle_service_action', action='start') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button" {% if service_status == 'active' %}disabled title="Service already active"{% endif %}>Start</button>
+            <button type="submit" class="action-button" {% if service_status == 'active' %}disabled title="Service already active"{% endif %}>Start Service</button>
         </form>
         <form action="{{ url_for('handle_service_action', action='stop') }}" method="post" style="display: inline;">
-            <button type="submit" class="action-button action-button-danger" {% if service_status != 'active' %}disabled title="Service not active"{% endif %}>Stop</button>
+            <button type="submit" class="action-button action-button-danger" {% if service_status != 'active' %}disabled title="Service not active"{% endif %}>Stop Service</button>
         </form>
-        |
+        <form action="{{ url_for('handle_service_action', action='restart') }}" method="post" style="display: inline;">
+            <button type="submit" class="action-button action-button-warning">Restart Service</button>
+            <span class="note">(Use after changing 'Serve' status)</span>
+        </form>
+        <br>
         <form action="{{ url_for('handle_service_action', action='enable') }}" method="post" style="display: inline;">
             <button type="submit" class="action-button action-button-info" {% if service_enabled == 'enabled' %}disabled title="Service already enabled"{% endif %}>Enable Boot Start</button>
         </form>
         <form action="{{ url_for('handle_service_action', action='disable') }}" method="post" style="display: inline;">
             <button type="submit" class="action-button action-button-danger" {% if service_enabled != 'enabled' %}disabled title="Service not enabled"{% endif %}>Disable Boot Start</button>
         </form>
+        <div class="restart-note">
+            <strong>Note:</strong> You must click "Restart Service" after changing the "Serve" status of any model for the changes to take effect in the running vLLM instance.
+        </div>
 
         <!-- Configured Models -->
         <h2>Configured Models</h2>
@@ -91,36 +102,45 @@
                     <tr>
                         <th>Name (Config Key)</th>
                         <th>Model ID</th>
-                        <th>Status</th>
+                        <th>Downloaded</th>
+                        <th>Serve Status</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for model in models %}
                     <tr>
-                        <td>
-                            {{ model.name }}
-                            {% if model.name == active_model_key %} <span class="active-model">(Active)</span> {% endif %}
-                        </td>
+                        <td>{{ model.config_key }}</td>
                         <td class="model-id-code">{{ model.model_id }}</td>
                         <td>
                             <span class="status-{{ 'downloaded' if model.downloaded else 'not-downloaded' }}">
-                                {{ 'Downloaded' if model.downloaded else 'Not Downloaded' }}
+                                {{ 'Yes' if model.downloaded else 'No' }}
+                            </span>
+                        </td>
+                        <td>
+                             <span class="status-{{ 'serving' if model.serve_status else 'not-serving' }}">
+                                {{ 'Serving' if model.serve_status else 'Not Serving' }}
                             </span>
                         </td>
                         <td>
                             {% if not model.downloaded %}
-                            <form action="{{ url_for('handle_download_model', model_name=model.name) }}" method="post" style="display: inline;">
+                            <form action="{{ url_for('handle_download_model', model_name=model.config_key) }}" method="post" style="display: inline;">
                                 <button type="submit" class="action-button action-button-info">Download</button>
                             </form>
-                            {% endif %}
-                            {% if model.downloaded %}
-                                <form action="{{ url_for('handle_activate_model', model_key=model.name) }}" method="post" style="display: inline;">
-                                    <button type="submit" class="action-button action-button-activate" {% if model.name == active_model_key and service_status == 'active' %}disabled title="Model already active"{% endif %}>Activate</button>
-                                </form>
                             {% else %}
-                                <button class="action-button action-button-activate" disabled title="Download model first">Activate</button>
+                                <!-- Toggle Serve Button -->
+                                <form action="{{ url_for('handle_toggle_serve', model_key=model.config_key) }}" method="post" style="display: inline;">
+                                    {% if model.serve_status %}
+                                        <input type="hidden" name="serve_action" value="false">
+                                        <button type="submit" class="action-button action-button-warning">Stop Serving</button>
+                                    {% else %}
+                                         <input type="hidden" name="serve_action" value="true">
+                                        <button type="submit" class="action-button action-button-toggle">Start Serving</button>
+                                    {% endif %}
+                                </form>
                             {% endif %}
+                            <!-- Removed Activate Button -->
+                            <!-- Add Delete from Config button? -->
                         </td>
                     </tr>
                     {% endfor %}
@@ -153,11 +173,11 @@
                         <td>{{ 'Yes' if model.gated else 'No' }}</td>
                         <td>
                             {% if already_configured %}
-                                <button class="action-button action-button-download-pop" disabled title="Model already in configuration">Configured</button>
+                                <button class="action-button action-button-add" disabled title="Model already in configuration">Configured</button>
                             {% else %}
                                 <!-- Changed button text and action URL -->
-                                <form action="{{ url_for('handle_download_popular_model', model_id=model.model_id) }}" method="post" style="display: inline;">
-                                    <button type="submit" class="action-button action-button-download-pop">Download</button>
+                                <form action="{{ url_for('handle_add_model', model_id=model.model_id) }}" method="post" style="display: inline;">
+                                    <button type="submit" class="action-button action-button-add">Add to Config</button>
                                 </form>
                             {% endif %}
                         </td>
