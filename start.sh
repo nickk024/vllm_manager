@@ -33,9 +33,6 @@ print_step() { echo -e "\n${BOLD}${BLUE}=== $1 ===${NC}"; }
 print_step "Running Sanity Checks"
 if [[ $EUID -eq 0 ]]; then
   print_warning "Running as root. It's recommended to run as a user with sudo privileges."
-  # If running as root, attempt to find a non-root user or default to root
-  # This is complex; for now, we proceed but ownership might be root:root if run as root
-  # A better approach is to require running as non-root with sudo rights.
 fi
 
 if ! command -v sudo &> /dev/null; then print_error "sudo command not found."; exit 1; fi
@@ -48,15 +45,16 @@ print_info "NVIDIA drivers detected."; nvidia-smi -L
 if ! command -v python3 &> /dev/null; then print_error "python3 not found."; exit 1; fi
 if ! python3 -m venv -h &> /dev/null; then print_error "python3-venv module not found."; exit 1; fi
 print_info "Python 3 and venv found."
-if ! command -v rsync &> /dev/null; then print_error "rsync command not found."; exit 1; fi
-print_info "rsync found."
+if ! command -v rsync &> /dev/null; then print_warning "rsync command not found. Will attempt to install."; fi
+print_info "Checks complete."
 
 
 # --- System Dependencies ---
 print_step "Installing System Dependencies (Requires sudo)"
 sudo apt-get update -q || { print_error "apt-get update failed."; exit 1; }
-sudo apt-get install -y -q build-essential git wget curl jq rsync || { print_error "Failed to install essential packages."; exit 1; }
-sudo apt-get install -y -q python3-dev python3-venv || { print_error "Failed to install python3-dev/venv."; exit 1; }
+# Added rsync and python3-venv to the install list
+sudo apt-get install -y -q build-essential git wget curl jq rsync python3-dev python3-venv || { print_error "Failed to install essential packages."; exit 1; }
+# Removed separate python3-dev/venv install line as it's included above now
 print_success "System dependencies installed."
 
 # --- Create Directories & Copy Project Files ---
@@ -67,7 +65,6 @@ print_success "Directory created and ownership set."
 
 print_step "Copying Project Files to ${VLLM_HOME}"
 rsync -a --delete --exclude='.git/' --exclude='legacy/' --exclude='logs/' --exclude='*venv/' --exclude='__pycache__/' "${SCRIPT_DIR}/" "${VLLM_HOME}/" || { print_error "Failed to copy project files using rsync."; exit 1; }
-# Ensure ownership AGAIN after rsync, as rsync might preserve source ownership
 sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to set final ownership of $VLLM_HOME"; exit 1; }
 print_success "Project files copied."
 
@@ -104,6 +101,7 @@ else
 fi
 
 # --- Install Python Dependencies ---
+# TODO: Create proper requirements.txt files for backend and frontend
 print_step "Installing Python Dependencies"
 # Backend dependencies
 print_info "Installing backend dependencies..."
@@ -136,21 +134,15 @@ print_step "Setting up Systemd Service (Requires sudo)"
 SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 TEMPLATE_PATH="${VLLM_HOME}/backend/vllm.service.template" # Path relative to VLLM_HOME now
 
-# --- Debug: Check template path right before use ---
-print_info "--- Pre-Systemd Check ---"
-print_info "Current directory: $(pwd)"
-print_info "Checking for template existence at: ${TEMPLATE_PATH}"
-if [ -f "$TEMPLATE_PATH" ]; then
-    print_success "Template file found at ${TEMPLATE_PATH}"
-else
-    print_error "Template file NOT FOUND at ${TEMPLATE_PATH}"
-    print_info "Listing contents of ${VLLM_HOME}:"
-    sudo ls -la "$VLLM_HOME"
+print_info "Checking for template at: ${TEMPLATE_PATH}"
+if [ ! -f "$TEMPLATE_PATH" ]; then
+    print_error "Systemd service template NOT FOUND at ${TEMPLATE_PATH}"
     print_info "Listing contents of ${VLLM_HOME}/backend:"
-    sudo ls -la "$VLLM_HOME/backend"
-    exit 1 # Exit if template not found here
+    ls -la "${VLLM_HOME}/backend" # Use VLLM_HOME which is absolute
+    exit 1
+else
+    print_success "Systemd service template found."
 fi
-# --- End Debug ---
 
 print_info "Creating systemd service file at ${SERVICE_FILE_PATH}"
 sudo sed -e "s|%USER%|${VLLM_USER}|g" \
