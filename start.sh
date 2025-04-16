@@ -29,12 +29,36 @@ print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_step() { echo -e "\n${BOLD}${BLUE}=== $1 ===${NC}"; }
 
+# Function to ask yes/no questions
+ask_yes_no() {
+    local prompt="$1"
+    local default="${2:-N}" # Default to No if not specified
+
+    if [[ "$default" =~ ^[Yy]$ ]]; then
+        prompt="$prompt [Y/n]"
+        default="Y"
+    else
+        prompt="$prompt [y/N]"
+        default="N"
+    fi
+
+    while true; do
+        read -p "$prompt " choice
+        choice=${choice:-$default} # Use default if user presses Enter
+        case "$choice" in
+            [Yy]* ) return 0;; # Yes returns 0 (success in shell)
+            [Nn]* ) return 1;; # No returns 1 (failure in shell)
+            * ) echo "Please answer yes or no.";;
+        esac
+    done
+}
+
 # --- Sanity Checks ---
 print_step "Running Sanity Checks"
+# ... (keep existing sanity checks) ...
 if [[ $EUID -eq 0 ]]; then
   print_warning "Running as root. It's recommended to run as a user with sudo privileges."
 fi
-
 if ! command -v sudo &> /dev/null; then print_error "sudo command not found."; exit 1; fi
 if [[ $EUID -ne 0 ]] && ! sudo -n true 2>/dev/null; then
     print_warning "Current user might not have passwordless sudo. You might be prompted for password."
@@ -48,16 +72,51 @@ print_info "Python 3 and venv found."
 if ! command -v rsync &> /dev/null; then print_warning "rsync command not found. Will attempt to install."; fi
 print_info "Checks complete."
 
+# --- Optional Cleanup ---
+print_step "Checking for Existing Installation"
+PERFORM_CLEANUP=false
+if [ -d "$VLLM_HOME" ] || [ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]; then
+    print_warning "An existing installation directory (${VLLM_HOME}) or service file seems to exist."
+    if ask_yes_no "Do you want to remove the existing installation and logs before proceeding?" "N"; then
+        PERFORM_CLEANUP=true
+    else
+        print_info "Proceeding without cleanup. Files might be overwritten."
+    fi
+else
+    print_info "No existing installation found at ${VLLM_HOME} or systemd path."
+fi
+
+if [ "$PERFORM_CLEANUP" = true ]; then
+    print_step "Performing Cleanup (Requires sudo)"
+    print_info "Stopping service ${SERVICE_NAME}..."
+    sudo systemctl stop "$SERVICE_NAME" # Ignore errors if service doesn't exist
+    print_info "Disabling service ${SERVICE_NAME}..."
+    sudo systemctl disable "$SERVICE_NAME" # Ignore errors
+    SERVICE_FILE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
+    if [ -f "$SERVICE_FILE_PATH" ]; then
+        print_info "Removing service file ${SERVICE_FILE_PATH}..."
+        sudo rm -f "$SERVICE_FILE_PATH" || print_warning "Failed to remove service file."
+    fi
+    print_info "Reloading systemd daemon..."
+    sudo systemctl daemon-reload || print_warning "Failed to reload systemd daemon."
+    print_info "Removing installation directory ${VLLM_HOME}..."
+    sudo rm -rf "$VLLM_HOME" || print_warning "Failed to remove installation directory."
+    print_info "Removing log directory ${LOG_DIR}..."
+    rm -rf "$LOG_DIR" || print_warning "Failed to remove log directory."
+    # Warn about potential lingering processes if needed
+    print_warning "Cleanup might not stop manually started backend/frontend processes."
+    print_success "Cleanup finished."
+fi
+
 
 # --- System Dependencies ---
 print_step "Installing System Dependencies (Requires sudo)"
 sudo apt-get update -q || { print_error "apt-get update failed."; exit 1; }
-# Added rsync and python3-venv to the install list
 sudo apt-get install -y -q build-essential git wget curl jq rsync python3-dev python3-venv || { print_error "Failed to install essential packages."; exit 1; }
-# Removed separate python3-dev/venv install line as it's included above now
 print_success "System dependencies installed."
 
 # --- Create Directories & Copy Project Files ---
+# (This section now runs after potential cleanup)
 print_step "Creating Installation Directory: ${VLLM_HOME}"
 sudo mkdir -p "$VLLM_HOME" || { print_error "Failed to create directory $VLLM_HOME"; exit 1; }
 sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to change ownership of $VLLM_HOME"; exit 1; }
@@ -69,6 +128,7 @@ sudo chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed
 print_success "Project files copied."
 
 # --- Create Log Directory ---
+# (This section now runs after potential cleanup)
 print_step "Creating Log Directory: ${LOG_DIR}"
 mkdir -p "$LOG_DIR" || { print_error "Failed to create log directory $LOG_DIR"; exit 1; }
 chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR" || print_warning "Could not set ownership of log directory ${LOG_DIR}"
@@ -87,10 +147,12 @@ print_info "Successfully changed working directory to $(pwd)"
 
 # --- Setup Python Virtual Environments ---
 print_step "Setting up Python Virtual Environments (in $(pwd))"
+# Venvs are inside VLLM_HOME, so they would have been removed by cleanup if requested
 if [ ! -d "venv" ]; then
     python3 -m venv venv || { print_error "Failed to create backend virtual environment."; exit 1; }
     print_info "Backend virtual environment created."
 else
+    # This case should only happen if cleanup wasn't performed and venv existed
     print_info "Backend virtual environment already exists."
 fi
 if [ ! -d "frontend_venv" ]; then
@@ -101,7 +163,6 @@ else
 fi
 
 # --- Install Python Dependencies ---
-# TODO: Create proper requirements.txt files for backend and frontend
 print_step "Installing Python Dependencies"
 # Backend dependencies
 print_info "Installing backend dependencies..."
@@ -138,7 +199,7 @@ print_info "Checking for template at: ${TEMPLATE_PATH}"
 if [ ! -f "$TEMPLATE_PATH" ]; then
     print_error "Systemd service template NOT FOUND at ${TEMPLATE_PATH}"
     print_info "Listing contents of ${VLLM_HOME}/backend:"
-    ls -la "${VLLM_HOME}/backend" # Use VLLM_HOME which is absolute
+    ls -la "${VLLM_HOME}/backend"
     exit 1
 else
     print_success "Systemd service template found."
