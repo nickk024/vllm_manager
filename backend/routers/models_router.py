@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status as http_status, Query, Path
 from typing import List, Dict, Any, Optional
 
 # Import models, config, and utils using relative paths
-from ..models import ConfiguredModelInfo, PopularModelInfo, AddModelRequest, GeneralResponse, ToggleServeRequest # Added ToggleServeRequest
+from ..models import ModelInfo, PopularModelInfo, AddModelRequest, GeneralResponse, ToggleServeRequest # Changed ConfiguredModelInfo to ModelInfo
 from ..config import load_model_config, save_model_config, CURATED_MODELS_DATA, MODELS_DIR
 from ..utils.gpu_utils import get_gpu_count
 from ..utils.hf_utils import fetch_dynamic_popular_models
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter() # Management endpoints will be prefixed in main.py
 
 # --- Helper ---
-def get_configured_models_internal() -> List[ConfiguredModelInfo]:
+def get_configured_models_internal() -> List[ModelInfo]:
     """Internal helper to get configured models and their status."""
     config = load_model_config()
     models = []
@@ -32,16 +32,17 @@ def get_configured_models_internal() -> List[ConfiguredModelInfo]:
             model_id = "Invalid Config Entry"
             logger.warning(f"Config entry for key '{key}' is not a dictionary: {info}")
 
-        models.append(ConfiguredModelInfo(
-            config_key=key,
+        # Note: ModelInfo has 'name', not 'config_key'. We map key to name.
+        # It also doesn't have 'serve_status'. This info is available in the config dict.
+        models.append(ModelInfo(
+            name=key,
             model_id=model_id,
-            downloaded=downloaded,
-            serve_status=serve_status
+            downloaded=downloaded
         ))
     return models
 
 # --- Routes ---
-@router.get("/models", response_model=List[ConfiguredModelInfo], summary="List Configured Models")
+@router.get("/models", response_model=List[ModelInfo], summary="List Configured Models")
 async def list_configured_models():
     """
     List all models currently present in the model_config.json file,
