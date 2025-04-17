@@ -31,18 +31,20 @@ except ImportError:
 # --- Custom Unified Logger Configuration ---
 import pathlib
 
-SPECIAL_LOG_PATH = "/opt/vllm/special_backend.log"
-SPECIAL_LOG_DIR = os.path.dirname(SPECIAL_LOG_PATH)
-LOG_LEVEL = logging.DEBUG
+# Define log path relative to the project root, using the unified name
+# Use os.path.abspath to ensure the path is correctly resolved
+UNIFIED_LOG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'logs', 'vllm_manager_app.log'))
+BACKEND_LOG_DIR = os.path.dirname(UNIFIED_LOG_PATH) # Keep variable name for clarity below, but uses unified path
+LOG_LEVEL = logging.DEBUG # Keep DEBUG level for file logging
 
-# Ensure the special log directory exists
+# Ensure the project log directory exists
 try:
-    pathlib.Path(SPECIAL_LOG_DIR).mkdir(parents=True, exist_ok=True)
-    print(f"[Backend INFO] Special log directory set to: {SPECIAL_LOG_DIR}")
+    pathlib.Path(BACKEND_LOG_DIR).mkdir(parents=True, exist_ok=True)
+    print(f"[Backend INFO] Log directory ensured: {BACKEND_LOG_DIR}")
 except Exception as e:
-    print(f"[Backend ERROR] Could not create/access special log directory: {SPECIAL_LOG_DIR}. Error: {e}", file=sys.stderr)
+    print(f"[Backend ERROR] Could not create/access log directory: {BACKEND_LOG_DIR}. Error: {e}", file=sys.stderr)
 
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [SpecialBackend] %(message)s')
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Backend] %(message)s')
 
 # Set up the root logger
 root_logger = logging.getLogger()
@@ -54,21 +56,24 @@ console_handler.setFormatter(formatter)
 root_logger.addHandler(console_handler)
 
 try:
-    special_file_handler = logging.handlers.RotatingFileHandler(SPECIAL_LOG_PATH, maxBytes=20*1024*1024, backupCount=10)
-    special_file_handler.setLevel(LOG_LEVEL)
-    special_file_handler.setFormatter(formatter)
-    root_logger.addHandler(special_file_handler)
-    logging.info(f"--- Special Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {SPECIAL_LOG_PATH}) ---")
+    # Use the unified path for the file handler
+    file_handler = logging.handlers.RotatingFileHandler(UNIFIED_LOG_PATH, maxBytes=20*1024*1024, backupCount=10)
+    file_handler.setLevel(LOG_LEVEL) # Log DEBUG and above to file
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+    logging.info(f"--- Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_PATH}) ---")
 except Exception as e:
-    print(f"[Backend ERROR] Failed to create special log handler for {SPECIAL_LOG_PATH}. Error: {e}", file=sys.stderr)
-    logging.error(f"Failed to create special log handler for {SPECIAL_LOG_PATH}. Error: {e}")
+    print(f"[Backend ERROR] Failed to create file log handler for {UNIFIED_LOG_PATH}. Error: {e}", file=sys.stderr)
+    logging.error(f"Failed to create file log handler for {UNIFIED_LOG_PATH}. Error: {e}")
 
 # Attach the special file handler to Ray Serve logger as well
 serve_logger = logging.getLogger("ray.serve")
-serve_logger.setLevel(LOG_LEVEL)
-serve_logger.addHandler(special_file_handler)
+serve_logger.setLevel(LOG_LEVEL) # Ensure Ray Serve logs at the desired file level
+# Add the unified file handler to Ray Serve logger
+serve_logger.addHandler(file_handler)
+# Keep console handler for Ray Serve as well, if not already present
 if not any(isinstance(h, logging.StreamHandler) for h in serve_logger.handlers):
-    serve_logger.addHandler(console_handler)
+    serve_logger.addHandler(console_handler) # Use the same console handler
 
 # Optionally, attach to all FastAPI routers if needed
 logger = logging.getLogger(__name__)
