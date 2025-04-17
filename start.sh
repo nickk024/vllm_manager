@@ -133,6 +133,11 @@ if [ ! -d "frontend_venv" ]; then python3 -m venv frontend_venv || { print_error
 
 # --- Install Python Dependencies ---
 print_step "Installing Python Dependencies"
+# Ensure clean environment
+print_info "Removing existing virtual environment and rebuilding..."
+rm -rf "${SCRIPT_DIR}/venv"
+python3 -m venv "${SCRIPT_DIR}/venv"
+source "${SCRIPT_DIR}/venv/bin/activate"
 # Backend
 print_info "Installing backend dependencies..."
 "${VLLM_HOME}/venv/bin/pip" install --upgrade pip || print_warning "Failed to upgrade pip."

@@ -31,19 +31,29 @@ router = APIRouter(
 
 # Systemd service management endpoints removed.
 
-@router.get("/status", response_model=ConfiguredModelStatus, summary="Get Ray Serve Status")
+@router.get("/status", response_model=ConfiguredModelStatus, summary="Get Production Health Status")
 async def get_ray_serve_status():
     """
-    Returns the current status of Ray Serve and the list of all configured models
-    (including their 'serve' status and download status).
+    Production health check endpoint with dependency verification and cluster status.
+    Returns detailed service health including Ray cluster status and critical dependencies.
     """
-    # Ray Serve status check (basic)
     try:
+        # Verify critical dependencies first
+        import pyarrow  # noqa: F401
         import ray
         from ray import serve
-        ray_status = "unknown"
+        from ray.serve.llm import LLMApp  # noqa: F401
+        
+        # Get detailed Ray status
+        ray_status = {
+            "initialized": ray.is_initialized(),
+            "nodes": len(ray.nodes()) if ray.is_initialized() else 0,
+            "resources": ray.available_resources() if ray.is_initialized() else {},
+            "version": ray.__version__
+        }
+        
+        # Get basic Serve status
         serve_status = "unknown"
-        # Try to get Ray and Serve status
         if ray.is_initialized():
             ray_status = "running"
             try:

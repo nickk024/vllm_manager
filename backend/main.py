@@ -16,7 +16,21 @@ import ray
 from ray import serve
 try:
     # Use the LLMApp approach for simplicity
-    from ray.serve.llm import LLMApp
+    # Production-grade Ray initialization
+    try:
+        import pyarrow  # Verify pyarrow is importable first
+        from ray.serve.llm import LLMApp
+    except ImportError as e:
+        logger.error(f"Critical dependency missing: {str(e)}")
+        raise RuntimeError(f"Dependency error: {str(e)}") from e
+
+    # Validate Ray connection
+    if not ray.is_initialized():
+        logger.info("Initializing new Ray cluster...")
+        ray.init(
+            runtime_env={"pip": ["pyarrow==12.0.1"]},
+            include_dashboard=False  # Disable in production
+        )
     # We might not need OpenAIProvider explicitly if LLMApp handles it
     # from ray.serve.openai_provider import OpenAIProvider
     RAY_SERVE_LLM_AVAILABLE = True
