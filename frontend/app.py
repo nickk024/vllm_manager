@@ -12,7 +12,8 @@ app.secret_key = os.urandom(24)
 # --- Logging Configuration ---
 # Standardized log directory and file name
 LOG_DIR_STD = "/opt/vllm/logs"
-FRONTEND_LOG_FILE = os.path.join(LOG_DIR_STD, "frontend.log")
+# Use the same log file as the backend for unified logging
+UNIFIED_LOG_FILE = os.path.join(LOG_DIR_STD, "vllm_manager_app.log")
 LOG_LEVEL = logging.DEBUG
 
 # Ensure the standard log directory exists (start.sh should create it, but double-check)
@@ -31,12 +32,12 @@ console_handler.setFormatter(formatter)
 app.logger.addHandler(console_handler)
 
 try:
-    # Use the standardized log file path
-    file_handler = logging.handlers.RotatingFileHandler(FRONTEND_LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+    # Use the unified log file path
+    file_handler = logging.handlers.RotatingFileHandler(UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
     file_handler.setLevel(LOG_LEVEL)
     file_handler.setFormatter(formatter)
     app.logger.addHandler(file_handler)
-    app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {FRONTEND_LOG_FILE}) ---")
+    app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_FILE}) ---")
 except Exception as e:
      print(f"[Flask ERROR] Failed to create file log handler for {FRONTEND_LOG_FILE}. Error: {e}", file=sys.stderr)
      app.logger.error(f"Failed to create file log handler for {FRONTEND_LOG_FILE}. Error: {e}")
@@ -138,20 +139,26 @@ def index():
 
 # Removed handle_activate_model route
 
-@app.route('/download/<model_name>', methods=['POST'])
+@app.route('/download/<model_name>', methods=['GET', 'POST'])
 def handle_download_model(model_name: str):
     """Handles download request for a specific *configured* model."""
     app.logger.info(f"Handling download request for configured model: {model_name}")
     if not model_name:
          flash("No model name provided for download.", "error")
          return redirect(url_for('index'))
-    hf_token = request.form.get('hf_token')
-    force_download = request.form.get('force') == 'on'
-    payload = {"models": [model_name], "token": hf_token if hf_token else None, "force": force_download}
-    result = call_backend("POST", "/models/download", json_data=payload)
-    if result and isinstance(result, dict) and result.get("status") == "ok":
-        flash(f"Download task for model '{model_name}' started in background.", "success")
-    return redirect(url_for('index'))
+    
+    # Handle both GET and POST requests
+    if request.method == 'POST':
+        hf_token = request.form.get('hf_token')
+        force_download = request.form.get('force') == 'on'
+        payload = {"models": [model_name], "token": hf_token if hf_token else None, "force": force_download}
+        result = call_backend("POST", "/models/download", json_data=payload)
+        if result and isinstance(result, dict) and result.get("status") == "ok":
+            flash(f"Download task for model '{model_name}' started in background.", "success")
+        return redirect(url_for('index'))
+    else:
+        # For GET requests, show a download form
+        return render_template('download.html', model_name=model_name)
 
 # Renamed route
 @app.route('/add_model/<path:model_id>', methods=['POST'])

@@ -113,9 +113,17 @@ print_success "Project files copied."
 # --- Create Log Directory (Standardized) ---
 # Use unified log path from config
 LOG_DIR_STD="${VLLM_HOME}/logs"  # Unified logging path from config
+UNIFIED_LOG_FILE="${LOG_DIR_STD}/vllm_manager_app.log"  # Unified log file path
 print_step "Creating Standard Log Directory: ${LOG_DIR_STD}"
 mkdir -p "$LOG_DIR_STD" || { print_error "Failed to create log directory $LOG_DIR_STD"; exit 1; }
 chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR_STD" || print_warning "Could not set ownership of log directory ${LOG_DIR_STD}"
+
+# Create a symlink to the unified log file in the project root for easier access
+if [ ! -L "${SCRIPT_DIR}/unified_log.log" ]; then
+    print_info "Creating symlink to unified log file in project root"
+    ln -sf "${UNIFIED_LOG_FILE}" "${SCRIPT_DIR}/unified_log.log" || print_warning "Could not create symlink to unified log file"
+fi
+
 print_success "Log directory created."
 
 # --- Change into Installation Directory ---
@@ -217,8 +225,9 @@ fi
 
 # Start Frontend
 print_info "Starting Flask frontend on port ${FRONTEND_PORT}..."
-# Frontend will now log directly to /opt/vllm/logs/frontend.log (or similar)
-# No need to export VLLM_LOG_DIR for it anymore
+# Set the backend URL environment variable for the frontend
+export VLLM_BACKEND_URL="http://localhost:${BACKEND_PORT}/api/v1/manage"
+print_info "Setting VLLM_BACKEND_URL=${VLLM_BACKEND_URL}"
 export FLASK_APP=frontend/app.py
 nohup "${VLLM_HOME}/frontend_venv/bin/python" -m flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > /dev/null 2>&1 &
 FRONTEND_PID=$!
