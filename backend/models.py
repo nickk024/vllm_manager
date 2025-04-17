@@ -5,9 +5,10 @@ from typing import List, Optional, Dict, Any
 
 class ModelInfo(BaseModel):
     """Information about a configured model."""
-    name: str
-    model_id: str
-    downloaded: bool
+    name: str = Field(..., description="The configuration key for the model.")
+    model_id: str = Field(..., description="The Hugging Face model ID.")
+    downloaded: bool = Field(..., description="Whether the model files are present locally.")
+    serve: Optional[bool] = Field(None, description="Whether the model is configured to be served (from model_config.json).")
 
 class PopularModelInfo(BaseModel):
     """Information about a popular/curated model."""
@@ -31,7 +32,7 @@ class ServiceActionResponse(BaseModel):
     """Response body for service actions."""
     status: str = Field(..., description="'ok' or 'error'")
     message: str
-    details: Optional[str] = None
+    details: Optional[Dict[str, Any]] = Field(None, description="Optional dictionary for additional details.")
 
 class GPUStat(BaseModel):
     """Statistics for a single GPU."""
@@ -57,16 +58,15 @@ class MonitoringStats(BaseModel):
     system_stats: SystemStats
 
 class ConfiguredModelStatus(BaseModel):
-    """Detailed status including service, active model, and configured models."""
-    service_status: str = Field(..., description="Current status from systemctl (e.g., 'active', 'inactive', 'failed')")
-    service_enabled: str = Field(..., description="Enabled status from systemctl (e.g., 'enabled', 'disabled')")
-    active_model_key: Optional[str] = Field(None, description="The key of the model currently set as active in active_model.txt, or null if none.")
-    configured_models: List[ModelInfo]
+    """Detailed status including Ray Serve status and configured models."""
+    ray_serve_status: str = Field(..., description="Status of Ray Serve (e.g., 'running', 'not_running', 'error').")
+    configured_models: List[ModelInfo] = Field(..., description="List of all models in the configuration, including their download and intended serve status.")
 
 class GeneralResponse(BaseModel):
     """Generic response model."""
-    status: str
-    message: str
+    status: str = Field(..., description="General status indicator (e.g., 'ok', 'skipped', 'error').")
+    message: str = Field(..., description="A descriptive message about the operation.")
+    details: Optional[Dict[str, Any]] = Field(None, description="Optional dictionary for additional details (e.g., added keys).") # Added details here too
 
 class ApiTestResponse(BaseModel):
     """Response model for the API test endpoint."""

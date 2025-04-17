@@ -25,19 +25,8 @@ def _download_single_model(model_name: str, model_config: Dict[str, Any], output
     # Check if model already exists and skip if not forcing
     if not force and os.path.exists(model_dir) and os.listdir(model_dir):
         logger.info(f"Model {model_name} already exists at {model_dir}. Skipping download.")
-        # Ensure config.json exists within the model directory (might be missing if manually copied)
-        config_path = os.path.join(model_dir, "config.json")
-        if not os.path.exists(config_path):
-             logger.warning(f"config.json missing in existing model dir {model_dir}. Creating.")
-             try:
-                 # Ensure the config being written matches the one from model_config.json
-                 # This assumes model_config passed here is the correct one from the main config
-                 with open(config_path, "w") as f:
-                     json.dump(model_config, f, indent=2)
-             except Exception as e:
-                 logger.error(f"Failed to create config.json for {model_name}: {e}")
-                 # Decide if this should count as a failure for the download task
-        return True # Count as success even if only config was created
+        # Rely on snapshot_download to provide the original config.json
+        return True # Existing model, count as success
 
     model_id = model_config.get("model_id")
     if not model_id:
@@ -66,14 +55,8 @@ def _download_single_model(model_name: str, model_config: Dict[str, Any], output
             # Consider adding ignore_patterns if needed, e.g., ignore_patterns=["*.safetensors"]
             # Consider using local_dir_use_symlinks=True/False based on filesystem/preference
         )
-
-        # Create config.json within the model directory after successful download
-        # This ensures the directory contains the necessary config for vLLM later
-        config_path = os.path.join(model_dir, "config.json")
-        with open(config_path, "w") as f:
-            json.dump(model_config, f, indent=2)
-
-        logger.info(f"Successfully downloaded and prepared {model_name}")
+        # Removed manual creation/overwrite of config.json - rely on snapshot_download
+        logger.info(f"Successfully downloaded {model_name}")
         return True
 
     except Exception as e:

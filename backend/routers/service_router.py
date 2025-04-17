@@ -13,9 +13,9 @@ from typing import Optional, Any
 # from ray.serve.exceptions import RayServeException
 
 # Import models, config, and utils using relative paths
-from ..models import ServiceActionResponse, ConfiguredModelStatus, ApiTestResponse, ConfiguredModelInfo # Updated import
-from ..utils.systemctl_utils import run_systemctl_command # Keep for start/stop/enable/disable/restart
-from ..config import load_model_config, MODELS_DIR, SERVICE_NAME # No longer need ACTIVE_MODEL_FILE functions
+from ..models import ServiceActionResponse, ConfiguredModelStatus, ApiTestResponse, ModelInfo # Updated import
+# Removed systemctl_utils import as it's obsolete
+from ..config import load_model_config, MODELS_DIR # Removed SERVICE_NAME, No longer need ACTIVE_MODEL_FILE functions
 from .models_router import get_configured_models_internal # Import helper from models router
 
 logger = logging.getLogger(__name__)
@@ -62,10 +62,10 @@ async def get_ray_serve_status():
     # Get configured models using the helper from models_router
     configured_models = get_configured_models_internal() # This now includes serve_status
 
+    # Return the updated status model
     return ConfiguredModelStatus(
-        service_status=f"Ray: {ray_status}, Serve: {serve_status}",
-        service_enabled="N/A",
-        configured_models=configured_models
+        ray_serve_status=f"Ray: {ray_status}, Serve: {serve_status}",
+        configured_models=configured_models # This list now includes the 'serve' status for each model
     )
 
 # Keep API test endpoint

@@ -8,11 +8,13 @@ __pycache__/
 *.egg-info/
 *.egg
 
+.pytest_cache/
 # Virtual Environments
 venv/
 frontend_venv/
 .venv/
 
+.venv_local_test/
 # Logs
 logs/*.log
 *.log

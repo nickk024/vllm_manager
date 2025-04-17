@@ -3,7 +3,7 @@
 import os
 import logging
 from fastapi import APIRouter, HTTPException, status as http_status, Query, Path, Body
-from fastapi import APIRouter, HTTPException, status as http_status, Query, Path
+# Removed duplicate import line below
 from typing import List, Dict, Any, Optional
 
 # Import models, config, and utils using relative paths
@@ -34,11 +34,12 @@ def get_configured_models_internal() -> List[ModelInfo]:
             logger.warning(f"Config entry for key '{key}' is not a dictionary: {info}")
 
         # Note: ModelInfo has 'name', not 'config_key'. We map key to name.
-        # It also doesn't have 'serve_status'. This info is available in the config dict.
+        # Populate the ModelInfo object, including the serve status
         models.append(ModelInfo(
             name=key,
             model_id=model_id,
-            downloaded=downloaded
+            downloaded=downloaded,
+            serve=serve_status # Add the serve status here
         ))
     return models
 

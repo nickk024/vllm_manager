@@ -150,60 +150,68 @@ try:
 except ImportError:
     LLMApp = None
 
-BASE_MODEL_KEY = "nomic-ai/nomic-embed-text-v1.5"  # Always-on base model key
+# Removed BASE_MODEL_KEY constant
 
-def build_llm_app(models_to_serve: Dict[str, Dict]) -> "LLMApp":
-    """
-    Build a Ray Serve LLMApp for OpenAI-compatible serving.
-    Always includes the base model. Additional models are loaded on demand.
-    """
-    if LLMApp is None:
-        raise ImportError("ray[serve] LLMApp is not available. Please install ray[serve].")
+def build_llm_app(full_config: Dict[str, Dict]) -> Optional["LLMApp"]:
+   """
+   Build a Ray Serve LLMApp for OpenAI-compatible serving based on the provided configuration.
 
-    app_config = {}
+   Args:
+       full_config: The complete model configuration dictionary loaded from model_config.json.
 
-    # Always-on base model
-    base_model_conf = models_to_serve.get(BASE_MODEL_KEY)
-    if base_model_conf:
-        base_model_path = os.path.join(MODELS_DIR, BASE_MODEL_KEY)
-        if os.path.isdir(base_model_path):
-            app_config[BASE_MODEL_KEY] = {
-                "model": base_model_path,
-                "engine_config": {
-                    "tensor_parallel_size": base_model_conf.get("tensor_parallel_size", 1),
-                    "max_model_len": base_model_conf.get("max_model_len"),
-                    "dtype": base_model_conf.get("dtype", "auto"),
-                    "gpu_memory_utilization": 0.90,
-                },
-            }
-        else:
-            logging.warning(f"Base model directory not found at {base_model_path}.")
-    else:
-        logging.warning(f"Base model config for {BASE_MODEL_KEY} not found in config.")
+   Returns:
+       An LLMApp instance configured with models marked "serve: true" and downloaded,
+       or None if no models are ready to be served or LLMApp is unavailable.
+   """
+   if LLMApp is None:
+       logger.error("Cannot build LLMApp: ray[serve] LLMApp is not available. Please install ray[serve].")
+       return None
 
-    # Add other models (if present)
-    for key, conf in models_to_serve.items():
-        if key == BASE_MODEL_KEY:
-            continue  # Already added
-        model_path = os.path.join(MODELS_DIR, key)
-        if os.path.isdir(model_path):
-            app_config[key] = {
-                "model": model_path,
-                "engine_config": {
-                    "tensor_parallel_size": conf.get("tensor_parallel_size", 1),
-                    "max_model_len": conf.get("max_model_len"),
-                    "dtype": conf.get("dtype", "auto"),
-                    "gpu_memory_utilization": 0.90,
-                },
-            }
-        else:
-            logging.warning(f"Model directory not found at {model_path} for key {key}")
+   app_config = {}
+   models_prepared_count = 0
 
-    if not app_config:
-        raise RuntimeError("No valid models found to serve in LLMApp config.")
+   logger.info("Building LLMApp config based on 'serve: true' flag and download status...")
+   for key, conf in full_config.items():
+       if not isinstance(conf, dict):
+           logger.warning(f"Skipping invalid config entry for key '{key}': not a dictionary.")
+           continue
 
-    # LLMApp takes **kwargs for models
-    return LLMApp(**app_config)
+       serve_flag = conf.get("serve", False)
+       model_path = os.path.join(MODELS_DIR, key)
+       is_downloaded = os.path.isdir(model_path) and bool(os.listdir(model_path))
+
+       if serve_flag and is_downloaded:
+           logger.info(f"Adding model '{key}' to LLMApp config.")
+           app_config[key] = {
+               "model": model_path, # Use the local path to the downloaded model directory
+               "engine_config": {
+                   "tensor_parallel_size": conf.get("tensor_parallel_size", 1),
+                   "max_model_len": conf.get("max_model_len"), # Let vLLM read from model's internal config if None?
+                   "dtype": conf.get("dtype", "auto"),
+                   "gpu_memory_utilization": conf.get("gpu_memory_utilization", 0.90), # Allow override from config
+                   # Add other relevant engine args from config if needed
+                   # e.g., "quantization": conf.get("quantization")
+               },
+               # Provider defaults to OpenAIProvider, no need to specify usually
+               # Route prefix defaults to model key, also usually fine
+           }
+           models_prepared_count += 1
+       elif serve_flag and not is_downloaded:
+            logger.warning(f"Model '{key}' marked to serve but not downloaded. Skipping for LLMApp.")
+       # else: # Model not marked to serve, no need to log anything here
+
+   if models_prepared_count == 0:
+       logger.warning("No models configured, marked to serve, AND downloaded found. Returning empty LLMApp config (Ray Serve might not start any models).")
+       # Returning an empty app might be okay, Ray Serve handles it.
+       # Alternatively, could return None and handle upstream in main.py
+       # Let's return None to be explicit that no app should be deployed.
+       return None
+       # raise RuntimeError("No valid models found to serve in LLMApp config.") # Or raise error?
+
+   logger.info(f"Prepared LLMApp config with {models_prepared_count} model(s).")
+
+   # LLMApp takes **kwargs for models
+   return LLMApp(**app_config)
 
 # --- Idle Timeout/Unloading Placeholder ---
 # The actual idle timeout and unloading logic will be managed by the backend,

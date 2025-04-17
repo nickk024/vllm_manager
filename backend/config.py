@@ -13,14 +13,14 @@ LOGS_DIR = os.path.join(VLLM_HOME, "logs") # Central definition for log dir base
 
 # --- Files ---
 CONFIG_PATH = os.path.join(CONFIG_DIR, "model_config.json")
-ACTIVE_MODEL_FILE = os.path.join(CONFIG_DIR, "active_model.txt") # Central definition
+# ACTIVE_MODEL_FILE = os.path.join(CONFIG_DIR, "active_model.txt") # Obsolete with Ray Serve
 
 # --- Service ---
-SERVICE_NAME = "vllm" # Systemd service name
+# SERVICE_NAME = "vllm" # Obsolete with Ray Serve
 
-# Ensure base directories exist
-os.makedirs(CONFIG_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
+# Directory creation is handled by start.sh in the target environment.
+# os.makedirs(CONFIG_DIR, exist_ok=True) # Removed - causes issues during import/testing
+# os.makedirs(MODELS_DIR, exist_ok=True) # Removed - causes issues during import/testing
 # Log directory creation is handled in logging setup (main.py, app.py) using LOGS_DIR or VLLM_LOG_DIR env var
 
 
@@ -95,32 +95,4 @@ def save_model_config(config_data: Dict[str, Any]):
         # Consider raising an exception for critical failures
         # raise IOError(f"Failed to save config file: {e}") from e
 
-def read_active_model_key() -> str | None:
-    """Reads the active model key from the tracking file."""
-    logger.debug(f"Reading active model key from: {ACTIVE_MODEL_FILE}")
-    if not os.path.exists(ACTIVE_MODEL_FILE):
-        logger.info(f"Active model file not found: {ACTIVE_MODEL_FILE}")
-        return None
-    try:
-        with open(ACTIVE_MODEL_FILE, 'r') as f:
-            key = f.read().strip()
-            if not key:
-                 logger.warning(f"Active model file is empty: {ACTIVE_MODEL_FILE}")
-                 return None
-            logger.debug(f"Found active model key: {key}")
-            return key
-    except Exception as e:
-        logger.error(f"Error reading active model file {ACTIVE_MODEL_FILE}: {e}")
-        return None # Return None on error
-
-def write_active_model_key(model_key: str):
-    """Writes the active model key to the tracking file."""
-    try:
-        logger.info(f"Setting active model to '{model_key}' in {ACTIVE_MODEL_FILE}")
-        os.makedirs(os.path.dirname(ACTIVE_MODEL_FILE), exist_ok=True) # Ensure directory exists
-        with open(ACTIVE_MODEL_FILE, 'w') as f:
-            f.write(model_key)
-        logger.info(f"Successfully updated {ACTIVE_MODEL_FILE}")
-    except Exception as e:
-        logger.error(f"Failed to write active model key to {ACTIVE_MODEL_FILE}: {e}")
-        raise IOError(f"Failed to set active model configuration: {e}") from e # Raise error
+# Removed read_active_model_key() and write_active_model_key() as they are obsolete with Ray Serve.
