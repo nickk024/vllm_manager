@@ -13,7 +13,7 @@ from typing import Optional, Any
 # from ray.serve.exceptions import RayServeException
 
 # Import models, config, and utils using relative paths
-from ..models import ServiceActionResponse, ServiceStatusResponse, ApiTestResponse, ConfiguredModelInfo # Updated import
+from ..models import ServiceActionResponse, ConfiguredModelStatus, ApiTestResponse, ConfiguredModelInfo # Updated import
 from ..utils.systemctl_utils import run_systemctl_command # Keep for start/stop/enable/disable/restart
 from ..config import load_model_config, MODELS_DIR, SERVICE_NAME # No longer need ACTIVE_MODEL_FILE functions
 from .models_router import get_configured_models_internal # Import helper from models router
@@ -31,7 +31,7 @@ router = APIRouter(
 
 # Systemd service management endpoints removed.
 
-@router.get("/status", response_model=ServiceStatusResponse, summary="Get Ray Serve Status")
+@router.get("/status", response_model=ConfiguredModelStatus, summary="Get Ray Serve Status")
 async def get_ray_serve_status():
     """
     Returns the current status of Ray Serve and the list of all configured models
@@ -62,7 +62,7 @@ async def get_ray_serve_status():
     # Get configured models using the helper from models_router
     configured_models = get_configured_models_internal() # This now includes serve_status
 
-    return ServiceStatusResponse(
+    return ConfiguredModelStatus(
         service_status=f"Ray: {ray_status}, Serve: {serve_status}",
         service_enabled="N/A",
         configured_models=configured_models
