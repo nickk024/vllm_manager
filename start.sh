@@ -111,8 +111,8 @@ chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to s
 print_success "Project files copied."
 
 # --- Create Log Directory (Standardized) ---
-# Always use /opt/vllm/logs for consistency with backend logger
-LOG_DIR_STD="/opt/vllm/logs"
+# Use unified log path from config
+LOG_DIR_STD="${VLLM_HOME}/logs"  # Unified logging path from config
 print_step "Creating Standard Log Directory: ${LOG_DIR_STD}"
 mkdir -p "$LOG_DIR_STD" || { print_error "Failed to create log directory $LOG_DIR_STD"; exit 1; }
 chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR_STD" || print_warning "Could not set ownership of log directory ${LOG_DIR_STD}"

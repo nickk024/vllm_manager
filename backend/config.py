@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 logger = logging.getLogger(__name__)
 
 # --- Configuration & Paths ---
-VLLM_HOME = os.environ.get("VLLM_HOME", "/opt/vllm")
+VLLM_HOME = os.environ.get("VLLM_HOME", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))  # Project root
 CONFIG_DIR = os.path.join(VLLM_HOME, "config")
 MODELS_DIR = os.path.join(VLLM_HOME, "models")
 LOGS_DIR = os.path.join(VLLM_HOME, "logs") # Central definition for log dir base

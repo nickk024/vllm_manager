@@ -33,7 +33,7 @@ import pathlib
 
 # Define log path relative to the project root, using the unified name
 # Use os.path.abspath to ensure the path is correctly resolved
-UNIFIED_LOG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'logs', 'vllm_manager_app.log'))
+UNIFIED_LOG_PATH = os.path.join(LOGS_DIR, "vllm_manager_app.log")  # Use centralized log dir
 BACKEND_LOG_DIR = os.path.dirname(UNIFIED_LOG_PATH) # Keep variable name for clarity below, but uses unified path
 LOG_LEVEL = logging.DEBUG # Keep DEBUG level for file logging
 
@@ -103,7 +103,20 @@ async def lifespan(app: FastAPI):
         # Connect to the running Ray cluster started by start.sh
         # address="auto" assumes head node is discoverable
         # namespace="serve" is important for Ray Serve components to find each other
-        ray.init(address="auto", namespace="serve", ignore_reinit_error=True, logging_level=logging.WARNING) # Reduce Ray's verbosity
+        # Cluster connection with resource validation
+        try:
+            ray.init(address="auto", namespace="serve", ignore_reinit_error=True, logging_level=logging.WARNING)
+        except ConnectionError:
+            logger.warning("No existing Ray cluster found - starting local instance")
+            ray.init(
+                address="local",
+                namespace="serve",
+                num_cpus=max(1, os.cpu_count() // 2),  # Dynamic resource allocation
+                num_gpus=1 if os.getenv('CUDA_VISIBLE_DEVICES') else 0,
+                runtime_env={"working_dir": VLLM_HOME},
+                ignore_reinit_error=True,
+                logging_level=logging.WARNING
+            )
         logger.info("Connected to Ray.")
 
         # Build the initial LLMApp configuration using the shared builder
@@ -169,7 +182,7 @@ app = FastAPI(
 logger.info("Including Management API routers...")
 app.include_router(models_router.router, prefix="/api/v1/manage") # Prefix management routes
 app.include_router(download_router.router, prefix="/api/v1/manage")
-app.include_router(service_router.router, prefix="/api/v1/manage") # Service router now controls Ray Serve app? Needs update.
+app.include_router(service_router.router, prefix="/api/v1/manage/service")
 app.include_router(monitoring_router.router, prefix="/api/v1/manage")
 logger.info("Management routers included successfully.")
 
