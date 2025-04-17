@@ -138,11 +138,17 @@ print_info "Installing backend dependencies..."
 "${VLLM_HOME}/venv/bin/pip" install --upgrade pip || print_warning "Failed to upgrade pip."
 if [ ! -f "backend/requirements.txt" ]; then
     print_warning "backend/requirements.txt not found. Installing core list."
-    "${VLLM_HOME}/venv/bin/pip" install "fastapi[all]" uvicorn huggingface_hub requests pynvml "ray[serve]" vllm pytest httpx || { print_error "Failed to install core backend dependencies (including vllm, pytest, httpx)."; exit 1; }
+    # Try installing with ray[serve,default] to potentially include more components
+    print_info "Installing core backend dependencies (using ray[serve,default])..."
+    "${VLLM_HOME}/venv/bin/pip" install "fastapi[all]" uvicorn huggingface_hub requests pynvml "ray[serve,default]" vllm pytest httpx || { print_error "Failed to install core backend dependencies (including vllm, pytest, httpx, ray[serve,default])."; exit 1; }
+    # Explicit install is likely redundant now, removing it.
+    # print_info "Ensuring ray[serve] is installed..."
+    # "${VLLM_HOME}/venv/bin/pip" install "ray[serve]" || { print_error "Failed to explicitly install Ray Serve."; exit 1; }
 else
     "${VLLM_HOME}/venv/bin/pip" install -r backend/requirements.txt || { print_error "Failed to install backend requirements from file."; exit 1; }
     # Ensure Ray Serve is installed even if requirements.txt is present
-    "${VLLM_HOME}/venv/bin/pip" install "ray[serve]" || { print_error "Failed to install Ray Serve."; exit 1; }
+    print_info "Ensuring ray[serve,default] is installed (from requirements)..."
+    "${VLLM_HOME}/venv/bin/pip" install "ray[serve,default]" || { print_error "Failed to install Ray Serve with default extras."; exit 1; }
 fi
 print_success "Backend dependencies installed."
 # Frontend
