@@ -135,7 +135,7 @@ async def add_model_to_config(req: AddModelRequest):
               message=f"No models added. Skipped {skipped_count} (already configured)."
          )
 
-from ..ray_deployments import build_llm_app
+from ..ray_deployments import build_llm_deployments # Renamed function
 
 @router.put("/config/models/{model_key}/serve", response_model=GeneralResponse, summary="Toggle Serve Status for a Model")
 async def toggle_model_serve_status(
@@ -167,12 +167,12 @@ async def toggle_model_serve_status(
         # Ensure Ray is initialized
         if not ray.is_initialized():
             ray.init(address="auto", namespace="serve", ignore_reinit_error=True)
-        # Build new LLMApp config and redeploy
-        llm_app = build_llm_app(current_config)
+        # Build new dictionary of deployments and redeploy
+        llm_deployments = build_llm_deployments(current_config)
         serve.run(
-            llm_app,
-            name="vllm_app",
-            route_prefix="/",
+            llm_deployments, # Pass the dictionary of deployments
+            # name="vllm_app", # Name is less relevant for dict deployment
+            # route_prefix="/", # Prefixes are defined by dict keys
             host="0.0.0.0",
             port=8000,
             blocking=False

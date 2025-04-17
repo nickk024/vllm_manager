@@ -20,8 +20,8 @@ from .models_router import get_configured_models_internal # Import helper from m
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
-    prefix="/service", # Prefix for management API
-    tags=["Service Management (Ray Serve)"] # Updated tag
+    # prefix="/service", # Removed redundant prefix, it's handled in main.py
+    tags=["Service Management (Ray Serve)"]
 )
 
 # Note: This router now manages Ray Serve status and API health.
@@ -42,8 +42,8 @@ async def get_ray_serve_status():
         import pyarrow  # noqa: F401
         import ray
         from ray import serve
-        from ray.serve.llm import LLMApp  # noqa: F401
-        
+        # from ray.serve.llm import LLMApp  # noqa: F401 <-- Removed unused import
+
         # Get detailed Ray status
         ray_status = {
             "initialized": ray.is_initialized(),

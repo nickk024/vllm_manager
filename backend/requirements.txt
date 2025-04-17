@@ -10,3 +10,4 @@ protobuf==4.25.3  # Explicit version to prevent conflicts
 grpcio==1.71.0  # Required for Ray Serve
 googleapis-common-protos==1.70.0  # Ray dependency
 filelock==3.18.0  # Required for model downloads
+botocore>=1.34.0 # Dependency for Ray (e.g., S3 storage, potentially LLMApp)

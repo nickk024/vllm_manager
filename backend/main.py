@@ -8,64 +8,39 @@ from contextlib import asynccontextmanager
 # Import config early for paths
 from .config import VLLM_HOME, LOGS_DIR, MODELS_DIR, load_model_config
 
-# Import routers
-from .routers import models_router, download_router, service_router, monitoring_router
-
-# --- Ray and Deployment Imports ---
-import ray
-from ray import serve
-try:
-    # Use the LLMApp approach for simplicity
-    # Production-grade Ray initialization
-    try:
-        import pyarrow  # Verify pyarrow is importable first
-        from ray.serve.llm import LLMApp
-    except ImportError as e:
-        logger.error(f"Critical dependency missing: {str(e)}")
-        raise RuntimeError(f"Dependency error: {str(e)}") from e
-
-    # Validate Ray connection
-    if not ray.is_initialized():
-        logger.info("Initializing new Ray cluster...")
-        ray.init(
-            runtime_env={"pip": ["pyarrow==12.0.1"]},
-            include_dashboard=False  # Disable in production
-        )
-    # We might not need OpenAIProvider explicitly if LLMApp handles it
-    # from ray.serve.openai_provider import OpenAIProvider
-    RAY_SERVE_LLM_AVAILABLE = True
-except ImportError:
-    logging.error("Ray Serve LLM components (LLMApp) not found. pip install 'ray[serve]'? vLLM deployment will fail.")
-    RAY_SERVE_LLM_AVAILABLE = False
-    # Define dummy class to prevent import errors later if needed
-    class LLMApp: pass
-# --- End Ray Imports ---
-
-
 # --- Custom Unified Logger Configuration ---
 import pathlib
 
 # Define log path relative to the project root, using the unified name
 # Use os.path.abspath to ensure the path is correctly resolved
-UNIFIED_LOG_PATH = os.path.join(LOGS_DIR, "vllm_manager_app.log")  # Use centralized log dir
-BACKEND_LOG_DIR = os.path.dirname(UNIFIED_LOG_PATH) # Keep variable name for clarity below, but uses unified path
+# Ensure absolute path for logging
+UNIFIED_LOG_PATH = os.path.abspath(os.path.join(LOGS_DIR, "vllm_manager_app.log"))
+BACKEND_LOG_DIR = os.path.dirname(UNIFIED_LOG_PATH)
 LOG_LEVEL = logging.DEBUG # Keep DEBUG level for file logging
 
 # Ensure the project log directory exists
+# Create logger instance *before* trying to use it
+logger = logging.getLogger(__name__) # Get logger for this module first
+
 try:
+    # Ensure the log directory exists with proper permissions
     pathlib.Path(BACKEND_LOG_DIR).mkdir(parents=True, exist_ok=True)
-    print(f"[Backend INFO] Log directory ensured: {BACKEND_LOG_DIR}")
+    os.chmod(BACKEND_LOG_DIR, 0o755)  # Ensure proper permissions
+    # Use the already defined logger instance
+    logger.info(f"Log directory ensured: {BACKEND_LOG_DIR}")
 except Exception as e:
-    print(f"[Backend ERROR] Could not create/access log directory: {BACKEND_LOG_DIR}. Error: {e}", file=sys.stderr)
+    # Use print for critical failure before logging is fully set up
+    print(f"[CRITICAL] Could not create/access log directory: {BACKEND_LOG_DIR}. Error: {e}", file=sys.stderr)
+    sys.exit(1)  # Fail fast if logging setup fails
 
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Backend] %(message)s')
 
 # Set up the root logger
 root_logger = logging.getLogger()
 root_logger.setLevel(LOG_LEVEL)
-for handler in root_logger.handlers[:]: root_logger.removeHandler(handler)
+for handler in root_logger.handlers[:]: root_logger.removeHandler(handler) # Clear existing handlers
 console_handler = logging.StreamHandler(sys.stderr)
-console_handler.setLevel(logging.INFO)
+console_handler.setLevel(logging.INFO) # Console logs INFO and above
 console_handler.setFormatter(formatter)
 root_logger.addHandler(console_handler)
 
@@ -75,37 +50,50 @@ try:
     file_handler.setLevel(LOG_LEVEL) # Log DEBUG and above to file
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
-    logging.info(f"--- Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_PATH}) ---")
+    logger.info(f"--- Backend Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_PATH}) ---")
 except Exception as e:
-    print(f"[Backend ERROR] Failed to create file log handler for {UNIFIED_LOG_PATH}. Error: {e}", file=sys.stderr)
-    logging.error(f"Failed to create file log handler for {UNIFIED_LOG_PATH}. Error: {e}")
-
-# Attach the special file handler to Ray Serve logger as well
-serve_logger = logging.getLogger("ray.serve")
-serve_logger.setLevel(LOG_LEVEL) # Ensure Ray Serve logs at the desired file level
-# Add the unified file handler to Ray Serve logger
-serve_logger.addHandler(file_handler)
-# Keep console handler for Ray Serve as well, if not already present
-if not any(isinstance(h, logging.StreamHandler) for h in serve_logger.handlers):
-    serve_logger.addHandler(console_handler) # Use the same console handler
-
-# Optionally, attach to all FastAPI routers if needed
-logger = logging.getLogger(__name__)
+    logger.error(f"Failed to create file log handler for {UNIFIED_LOG_PATH}. Error: {e}", exc_info=True)
+    # Fallback to console if file logging fails, but don't exit
 
 # Global exception hook to log uncaught exceptions
 def log_uncaught_exceptions(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    # Use the root logger for uncaught exceptions
+    logging.getLogger().critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
 sys.excepthook = log_uncaught_exceptions
 # --- End Custom Unified Logger Configuration ---
 
+# Import routers AFTER logger is configured
+from .routers import models_router, download_router, service_router, monitoring_router
+
+# --- Ray and Deployment Imports ---
+# Now safe to import Ray components, logger is available for error handling
+import ray
+from ray import serve
+try:
+    # Basic Ray/Serve import check
+    import pyarrow
+    # No need to import LLMApp here anymore
+    logger.info("Ray and Ray Serve core components seem available.")
+
+    # Validate Ray connection (moved inside lifespan)
+
+    # Attach the special file handler to Ray Serve logger if Ray Serve is available
+    # Do this *after* Ray is initialized in lifespan to ensure logger exists
+    # Moved logger setup to lifespan
+
+except ImportError as e:
+    logger.error(f"Core Ray or Serve component missing: {e}. LLM deployment will likely fail.", exc_info=True)
+    # Allow FastAPI to start, but deployment will fail later in lifespan
+# --- End Ray Imports ---
+
 
 # --- Ray Serve Application Definition ---
-# Use the builder from ray_deployments.py for LLMApp construction
-from .ray_deployments import build_llm_app
+# Use the builder from ray_deployments.py for LLM deployment construction
+from .ray_deployments import build_llm_deployments # Import the renamed function
 
 # --- FastAPI App Lifecycle ---
 @asynccontextmanager
@@ -133,40 +121,54 @@ async def lifespan(app: FastAPI):
             )
         logger.info("Connected to Ray.")
 
-        # Build the initial LLMApp configuration using the shared builder
-        full_config = load_model_config()
-        llm_application = build_llm_app(full_config)
+        # Configure Ray Serve logger *after* Ray init and *before* deployment
+        try:
+            serve_logger = logging.getLogger("ray.serve")
+            serve_logger.setLevel(LOG_LEVEL) # Ensure Ray Serve logs at the desired file level
+            # Add the unified file handler to Ray Serve logger
+            if 'file_handler' in locals() and file_handler not in serve_logger.handlers:
+                 serve_logger.addHandler(file_handler)
+            # Keep console handler for Ray Serve as well, if not already present
+            if not any(isinstance(h, logging.StreamHandler) for h in serve_logger.handlers):
+                serve_logger.addHandler(console_handler) # Use the same console handler
+            logger.info("Ray Serve logger configured.")
+        except NameError:
+             logger.warning("File handler not defined, skipping adding it to Ray Serve logger.")
+        except Exception as e:
+            logger.error(f"Error configuring Ray Serve logger: {e}", exc_info=True)
 
-        if llm_application:
-            # Deploy the application using serve.run()
-            # This replaces the previous systemd service start for vLLM itself
-            # The host/port here are for Ray Serve's API endpoint (proxy)
-            # We want this to be the main inference endpoint (e.g., 8000)
+
+        # Build the dictionary of LLM deployments using the shared builder
+        full_config = load_model_config()
+        llm_deployments = build_llm_deployments(full_config)
+
+        if llm_deployments:
+            # Deploy the dictionary of deployments using serve.run()
+            # Keys in the dict become route prefixes (e.g., /model_key)
             serve_host = "0.0.0.0"
             serve_port = 8000 # Standard OpenAI API port
-            logger.info(f"Deploying Ray Serve application 'vllm_app' on {serve_host}:{serve_port}...")
+            logger.info(f"Deploying {len(llm_deployments)} Ray Serve LLM deployment(s) on {serve_host}:{serve_port}...")
             try:
-                 # Define deployment options here
-                 # Assign GPUs based on max TP size needed? Or let Ray schedule?
-                 # For simplicity, let Ray schedule based on total GPUs available initially.
-                 # TODO: Refine resource allocation based on max_required_tp
+                 # serve.run accepts a dictionary of {route_prefix: deployment}
                  serve.run(
-                      llm_application,
-                      name="vllm_app", # Name for the Ray Serve application
-                      route_prefix="/", # Expose at root (e.g., /v1/models)
+                      llm_deployments,
+                      # name="vllm_app", # Name is less relevant when deploying dict
+                      # route_prefix="/", # Prefixes are defined by dict keys
                       host=serve_host,
                       port=serve_port,
                       blocking=False # Allow FastAPI startup to continue
                  )
-                 logger.info("Ray Serve deployment initiated.")
+                 logger.info("Ray Serve deployment initiation request sent.")
             except Exception as e:
-                 logger.error(f"Failed to deploy Ray Serve application: {e}", exc_info=True)
+                 logger.error(f"Failed to deploy Ray Serve LLM deployments: {e}", exc_info=True)
                  # Should we exit FastAPI startup?
         else:
-             logger.warning("Could not build LLMApp, skipping Ray Serve deployment.")
+             logger.warning("No valid LLM deployments built, skipping Ray Serve deployment.")
 
+    except ImportError as e:
+         logger.error(f"ImportError during Ray initialization or deployment build: {e}. Cannot deploy models.", exc_info=True)
     except Exception as e:
-        logger.error(f"Error during Ray initialization or initial deployment: {e}", exc_info=True)
+        logger.error(f"Error during Ray initialization or initial deployment setup: {e}", exc_info=True)
         # Continue starting FastAPI management API even if Ray deployment fails? Or exit?
         # Let's continue for now, management API might still be useful.
 
