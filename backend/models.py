@@ -75,3 +75,7 @@ class ApiTestResponse(BaseModel):
     vllm_api_reachable: bool
     vllm_response: Optional[Any] = None # Store the raw response from vLLM
     error_details: Optional[str] = None
+
+class ToggleServeRequest(BaseModel):
+    """Request body for toggling the serve status of a model."""
+    serve: bool = Field(..., description="Set to true to serve the model, false to unserve.")
