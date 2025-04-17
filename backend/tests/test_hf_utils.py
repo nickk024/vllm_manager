@@ -95,7 +95,7 @@ class TestHfUtils:
     def test_fetch_dynamic_popular_models_api_error(self):
         """Test error handling when the HF API fails."""
         # Mock the HfApi to raise an exception
-        with patch('huggingface_hub.HfApi') as mock_hf_api:
+        with patch('backend.utils.hf_utils.HfApi') as mock_hf_api:
             mock_api_instance = mock_hf_api.return_value
             mock_api_instance.list_models.side_effect = Exception("API Error")
             

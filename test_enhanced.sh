@@ -33,9 +33,16 @@ else
     fi
 fi
 
-# Setup clean venv
+# Setup test environment
 echo "=== Setting up test environment ==="
-python3 -m venv "${SCRIPT_DIR}/test_venv"
+
+# Create virtual environment if it doesn't exist
+if [ ! -d "${SCRIPT_DIR}/test_venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv "${SCRIPT_DIR}/test_venv"
+fi
+
+# Activate virtual environment
 source "${SCRIPT_DIR}/test_venv/bin/activate"
 
 # Install test dependencies
@@ -54,6 +61,13 @@ export VLLM_LOG_DIR="${SCRIPT_DIR}/test_logs"
 export VLLM_CONFIG_DIR="${SCRIPT_DIR}/test_config"
 export VLLM_MODELS_DIR="${SCRIPT_DIR}/test_models"
 
+# Set environment variables for test detection
+export TEST_ENV_TYPE=$ENV_TYPE
+export TEST_ENV_SUBTYPE=$VLLM_TEST_ENV
+if [[ "$VLLM_TEST_ENV" == "nvidia_gpu" ]]; then
+    export TEST_GPU_COUNT=$GPU_COUNT
+fi
+
 # Run tests with coverage
 echo "=== Running tests with coverage ==="
 python -m pytest backend/tests/ -v --cov=backend --cov-report=term --cov-report=html:coverage_report
@@ -67,6 +81,6 @@ echo "Packages:"
 pip list | grep -E 'pytest|fastapi|ray|vllm|torch|huggingface'
 
 # Cleanup
-deactivate
 echo "=== Test complete ==="
 echo "Coverage report available in: ${SCRIPT_DIR}/coverage_report/index.html"
+deactivate
