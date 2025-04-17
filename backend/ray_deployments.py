@@ -30,6 +30,16 @@ logger = logging.getLogger("ray.serve") # Use Ray Serve's logger
 from ray.serve.llm import build_llm_deployment
 # Removed unused import: from ray.serve.config import ScalingConfig
 
+# Import the Apple Silicon detection function
+try:
+    from .utils.gpu_utils import is_apple_silicon
+except ImportError:
+    # Fallback if import fails
+    def is_apple_silicon() -> bool:
+        """Fallback implementation if import fails."""
+        import platform
+        return platform.system() == "Darwin" and platform.machine() == "arm64"
+
 def build_llm_deployments(full_config: Dict[str, Dict]) -> Optional[Dict[str, Any]]:
     """
     Build a dictionary of Ray Serve Deployments for OpenAI-compatible serving
@@ -42,6 +52,10 @@ def build_llm_deployments(full_config: Dict[str, Dict]) -> Optional[Dict[str, An
         A dictionary mapping model keys (used as route prefixes) to their
         corresponding Ray Serve Deployment objects, or None if no models are ready.
     """
+    # Check for Apple Silicon environment
+    if is_apple_silicon():
+        logger.warning("Running on Apple Silicon. Ray Serve deployments with vLLM may not work as expected.")
+        logger.warning("This is a development environment. Production deployment should use NVIDIA GPUs.")
     deployments = {}
     models_prepared_count = 0
 
@@ -67,6 +81,14 @@ def build_llm_deployments(full_config: Dict[str, Dict]) -> Optional[Dict[str, An
                     # Add other relevant engine args from config if needed
                     # e.g., "quantization": conf.get("quantization")
                 }
+                
+                # Adjust configuration for Apple Silicon if needed
+                if is_apple_silicon():
+                    # Force tensor_parallel_size to 1 on Apple Silicon
+                    engine_conf["tensor_parallel_size"] = 1
+                    # Add CPU-only flag if available in the version of vLLM being used
+                    engine_conf["cpu_only"] = True
+                    logger.info("Adjusted engine configuration for Apple Silicon environment")
                 # Filter out None values as build_llm_deployment might expect concrete values or defaults
                 engine_conf = {k: v for k, v in engine_conf.items() if v is not None}
 
@@ -113,7 +135,7 @@ def build_llm_deployments(full_config: Dict[str, Dict]) -> Optional[Dict[str, An
                                             engine_config=engine_conf,
                                         )
                                     except Exception as e4:
-                                        logger.error(f"All parameter name attempts failed for model '{model_name}': {e4}")
+                                        logger.error(f"All parameter name attempts failed for model '{key}': {e4}")
                                         raise
                             else:
                                 # Re-raise if it's a different TypeError

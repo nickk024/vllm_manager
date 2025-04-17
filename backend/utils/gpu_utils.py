@@ -5,6 +5,22 @@ from ..models import GPUStat # Relative import for Pydantic model
 
 logger = logging.getLogger(__name__)
 
+def is_apple_silicon() -> bool:
+    """
+    Detect if running on Apple Silicon (M1/M2/M3) hardware.
+    
+    Returns:
+        bool: True if running on Apple Silicon, False otherwise
+    """
+    import platform
+    
+    # Check if running on macOS
+    if platform.system() != "Darwin":
+        return False
+    
+    # Check for arm64 architecture which indicates Apple Silicon
+    return platform.machine() == "arm64"
+
 # Attempt to import and initialize pynvml
 try:
     import pynvml
@@ -92,6 +108,11 @@ def _get_gpu_stats_smi() -> List[GPUStat]:
 
 def get_gpu_stats() -> List[GPUStat]:
     """Public function to get GPU stats, preferring NVML."""
+    # Early return for Apple Silicon - no NVIDIA GPUs
+    if is_apple_silicon():
+        logger.info("Running on Apple Silicon, no NVIDIA GPU stats available.")
+        return []
+        
     if NVML_AVAILABLE:
         logger.debug("Attempting GPU stats via NVML.")
         return _get_gpu_stats_nvml()
@@ -101,6 +122,11 @@ def get_gpu_stats() -> List[GPUStat]:
 
 def get_gpu_count() -> int:
     """Get number of available NVIDIA GPUs."""
+    # Early return for Apple Silicon - no NVIDIA GPUs
+    if is_apple_silicon():
+        logger.info("Running on Apple Silicon, no NVIDIA GPUs available.")
+        return 0
+        
     if NVML_AVAILABLE:
         try:
             count = pynvml.nvmlDeviceGetCount()

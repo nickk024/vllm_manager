@@ -24,12 +24,14 @@ class TestGpuUtils:
     def test_get_gpu_count_nvidia(self):
         """Test GPU count detection on NVIDIA GPUs (production environment)."""
         # Test with NVML available
-        with patch('backend.utils.gpu_utils.NVML_AVAILABLE', True), \
+        with patch('backend.utils.gpu_utils.is_apple_silicon', return_value=False), \
+             patch('backend.utils.gpu_utils.NVML_AVAILABLE', True), \
              patch('pynvml.nvmlDeviceGetCount', return_value=2):
             assert get_gpu_count() == 2
         
         # Test with NVML unavailable but nvidia-smi available
-        with patch('backend.utils.gpu_utils.NVML_AVAILABLE', False), \
+        with patch('backend.utils.gpu_utils.is_apple_silicon', return_value=False), \
+             patch('backend.utils.gpu_utils.NVML_AVAILABLE', False), \
              patch('subprocess.check_output') as mock_subprocess:
             mock_subprocess.return_value = "GPU 0: NVIDIA A100\nGPU 1: NVIDIA A100\n"
             assert get_gpu_count() == 2
@@ -51,7 +53,8 @@ class TestGpuUtils:
         mock_mem_info = MagicMock(used=5*1024*1024*1024, total=40*1024*1024*1024)
         mock_util = MagicMock(gpu=75.5)
         
-        with patch('backend.utils.gpu_utils.NVML_AVAILABLE', True), \
+        with patch('backend.utils.gpu_utils.is_apple_silicon', return_value=False), \
+             patch('backend.utils.gpu_utils.NVML_AVAILABLE', True), \
              patch('pynvml.nvmlDeviceGetCount', return_value=1), \
              patch('pynvml.nvmlDeviceGetHandleByIndex', return_value=mock_handle), \
              patch('pynvml.nvmlDeviceGetName', return_value="NVIDIA A100"), \
@@ -70,7 +73,8 @@ class TestGpuUtils:
     
     def test_get_gpu_stats_smi_fallback(self):
         """Test GPU stats using nvidia-smi fallback."""
-        with patch('backend.utils.gpu_utils.NVML_AVAILABLE', False), \
+        with patch('backend.utils.gpu_utils.is_apple_silicon', return_value=False), \
+             patch('backend.utils.gpu_utils.NVML_AVAILABLE', False), \
              patch('subprocess.check_output') as mock_subprocess:
             # Simulate nvidia-smi output
             mock_subprocess.return_value = "0, NVIDIA A100, 65, 75.5, 5120, 40960"
@@ -86,7 +90,8 @@ class TestGpuUtils:
     
     def test_nvml_error_handling(self):
         """Test error handling when NVML throws exceptions."""
-        with patch('backend.utils.gpu_utils.NVML_AVAILABLE', True), \
+        with patch('backend.utils.gpu_utils.is_apple_silicon', return_value=False), \
+             patch('backend.utils.gpu_utils.NVML_AVAILABLE', True), \
              patch('pynvml.nvmlDeviceGetCount', side_effect=Exception("NVML Error")), \
              patch('backend.utils.gpu_utils._get_gpu_stats_smi', return_value=[]) as mock_smi:
             
