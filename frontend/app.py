@@ -10,17 +10,18 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 # --- Logging Configuration ---
-LOG_DIR_DEFAULT = os.path.join(os.path.dirname(__file__), "..", "logs")
-LOG_DIR = os.environ.get("VLLM_LOG_DIR", LOG_DIR_DEFAULT)
-UNIFIED_LOG_FILE = os.path.join(LOG_DIR, "vllm_manager.log")
+# Standardized log directory and file name
+LOG_DIR_STD = "/opt/vllm/logs"
+FRONTEND_LOG_FILE = os.path.join(LOG_DIR_STD, "frontend.log")
 LOG_LEVEL = logging.DEBUG
-log_dir_valid = False
+
+# Ensure the standard log directory exists (start.sh should create it, but double-check)
 try:
-    os.makedirs(LOG_DIR, exist_ok=True)
-    log_dir_valid = True
-    print(f"[Flask INFO] Logging directory set to: {LOG_DIR}")
+    os.makedirs(LOG_DIR_STD, exist_ok=True)
+    print(f"[Flask INFO] Standard log directory set to: {LOG_DIR_STD}")
 except OSError as e:
-     print(f"[Flask ERROR] Could not create/access log directory: {LOG_DIR}. Error: {e}", file=sys.stderr)
+     print(f"[Flask ERROR] Could not create/access standard log directory: {LOG_DIR_STD}. Error: {e}", file=sys.stderr)
+
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - [Flask] %(message)s')
 app.logger.setLevel(LOG_LEVEL)
 for handler in app.logger.handlers[:]: app.logger.removeHandler(handler)
@@ -28,18 +29,17 @@ console_handler = logging.StreamHandler(sys.stderr)
 console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(formatter)
 app.logger.addHandler(console_handler)
-if log_dir_valid:
-    try:
-        file_handler = logging.handlers.RotatingFileHandler(UNIFIED_LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
-        file_handler.setLevel(LOG_LEVEL)
-        file_handler.setFormatter(formatter)
-        app.logger.addHandler(file_handler)
-        app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {UNIFIED_LOG_FILE}) ---")
-    except Exception as e:
-         print(f"[Flask ERROR] Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}", file=sys.stderr)
-         app.logger.error(f"Failed to create file log handler for {UNIFIED_LOG_FILE}. Error: {e}")
-else:
-     app.logger.warning("--- Flask Logging configured (Console only) ---")
+
+try:
+    # Use the standardized log file path
+    file_handler = logging.handlers.RotatingFileHandler(FRONTEND_LOG_FILE, maxBytes=10*1024*1024, backupCount=5)
+    file_handler.setLevel(LOG_LEVEL)
+    file_handler.setFormatter(formatter)
+    app.logger.addHandler(file_handler)
+    app.logger.info(f"--- Flask Logging configured (Console: INFO, File: {LOG_LEVEL} at {FRONTEND_LOG_FILE}) ---")
+except Exception as e:
+     print(f"[Flask ERROR] Failed to create file log handler for {FRONTEND_LOG_FILE}. Error: {e}", file=sys.stderr)
+     app.logger.error(f"Failed to create file log handler for {FRONTEND_LOG_FILE}. Error: {e}")
 # --- End Logging Configuration ---
 
 BACKEND_API_URL = os.environ.get("VLLM_BACKEND_URL", "http://localhost:8080/api/v1/manage") # Point to management prefix

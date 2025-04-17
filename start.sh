@@ -16,7 +16,7 @@ FRONTEND_PID_FILE="${VLLM_HOME}/frontend.pid" # PID file location
 # Get the directory where this script is located (project root)
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 LOG_DIR="${SCRIPT_DIR}/logs" # Log directory in project root
-UNIFIED_LOG_FILE="${LOG_DIR}/vllm_manager.log" # Unified log file name
+UNIFIED_LOG_FILE="${LOG_DIR}/vllm_manager_app.log" # Unified log file name (matches Python config)
 
 # Color definitions
 RED='\033[0;31m'
@@ -110,10 +110,12 @@ rsync -a --delete --exclude='.git/' --exclude='legacy/' --exclude='logs/' --excl
 chown -R "${VLLM_USER}:${VLLM_GROUP}" "$VLLM_HOME" || { print_error "Failed to set final ownership of $VLLM_HOME"; exit 1; }
 print_success "Project files copied."
 
-# --- Create Log Directory ---
-print_step "Creating Log Directory: ${LOG_DIR}"
-mkdir -p "$LOG_DIR" || { print_error "Failed to create log directory $LOG_DIR"; exit 1; }
-chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR" || print_warning "Could not set ownership of log directory ${LOG_DIR}"
+# --- Create Log Directory (Standardized) ---
+# Always use /opt/vllm/logs for consistency with backend logger
+LOG_DIR_STD="/opt/vllm/logs"
+print_step "Creating Standard Log Directory: ${LOG_DIR_STD}"
+mkdir -p "$LOG_DIR_STD" || { print_error "Failed to create log directory $LOG_DIR_STD"; exit 1; }
+chown "${VLLM_USER}:${VLLM_GROUP}" "$LOG_DIR_STD" || print_warning "Could not set ownership of log directory ${LOG_DIR_STD}"
 print_success "Log directory created."
 
 # --- Change into Installation Directory ---
@@ -199,17 +201,17 @@ sleep 2
 if ps -p $BACKEND_PID > /dev/null; then
    print_success "Backend started successfully (PID: $BACKEND_PID). Logs: ${UNIFIED_LOG_FILE}"
 else
-   print_error "Backend failed to start. Check logs: ${UNIFIED_LOG_FILE}"
+  print_error "Backend failed to start. Check logs: ${UNIFIED_LOG_FILE} and ${BACKEND_STDERR_LOG}" # Mention stderr log too
 fi
 
 # Start Frontend
 print_info "Starting Flask frontend on port ${FRONTEND_PORT}..."
-export VLLM_LOG_DIR="${LOG_DIR}"
+# Frontend will now log directly to /opt/vllm/logs/frontend.log (or similar)
+# No need to export VLLM_LOG_DIR for it anymore
 export FLASK_APP=frontend/app.py
 nohup "${VLLM_HOME}/frontend_venv/bin/python" -m flask run --host 0.0.0.0 --port ${FRONTEND_PORT} > /dev/null 2>&1 &
 FRONTEND_PID=$!
 if [ -d "$VLLM_HOME" ]; then echo $FRONTEND_PID > "$FRONTEND_PID_FILE"; else print_warning "Cannot write frontend PID file, VLLM_HOME not found."; fi
-unset VLLM_LOG_DIR
 sleep 1
 if ps -p $FRONTEND_PID > /dev/null; then
    print_success "Frontend started successfully (PID: $FRONTEND_PID). Logs: ${UNIFIED_LOG_FILE}"
