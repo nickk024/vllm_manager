@@ -47,11 +47,16 @@ export VLLM_TEST_MODE="true"
 if [ -d "test_venv" ]; then
     print_info "Activating test virtual environment"
     source test_venv/bin/activate
+    # Always ensure test requirements are installed
+    print_info "Installing/updating test requirements"
+    pip install -r testing/requirements-test.txt
 else
     print_warning "Test virtual environment not found, creating one"
     python3 -m venv test_venv
     source test_venv/bin/activate
+    print_info "Installing backend requirements"
     pip install -r backend/requirements.txt
+    print_info "Installing test requirements"
     pip install -r testing/requirements-test.txt
 fi
 

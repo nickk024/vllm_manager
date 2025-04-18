@@ -5,8 +5,14 @@ import tempfile
 import shutil
 from unittest.mock import patch
 
-# Configure pytest-asyncio
-pytest_plugins = ["pytest_asyncio"]
+# Configure pytest plugins
+try:
+    import pytest_asyncio
+    pytest_plugins = ["pytest_asyncio"]
+except ImportError:
+    # If pytest_asyncio is not installed, we'll skip the async tests
+    print("WARNING: pytest_asyncio not installed. Async tests will be skipped.")
+    pytest_plugins = []
 
 # Ensure backend is in the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
