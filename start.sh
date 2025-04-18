@@ -43,8 +43,112 @@ ask_yes_no() {
 # --- Sanity Checks ---
 print_step "Running Sanity Checks"
 if [[ $EUID -ne 0 ]]; then print_error "This script expects to be run as root."; exit 1; fi
-if ! command -v nvidia-smi &> /dev/null; then print_error "NVIDIA drivers not found."; exit 1; fi
-print_info "NVIDIA drivers detected."; nvidia-smi -L
+
+# Check for NVIDIA drivers and attempt installation if missing
+if command -v nvidia-smi &> /dev/null; then
+    print_info "NVIDIA drivers already detected."
+    nvidia-smi -L
+else
+    print_warning "NVIDIA drivers (nvidia-smi) not found. Attempting installation..."
+
+    # --- Distro Check and Sources Modification (Debian specific) ---
+    if [ -f /etc/debian_version ]; then
+        print_info "Debian-based system detected. Checking APT sources for non-free components..."
+        SOURCES_FILE="/etc/apt/sources.list"
+        SOURCES_BACKUP="${SOURCES_FILE}.bak_$(date +%Y%m%d%H%M%S)"
+        MODIFIED_SOURCES=false
+
+        # Check if non-free components are already enabled for the main repo lines containing 'main'
+        # We check if *any* relevant line is missing *all* required components
+        if grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain' "$SOURCES_FILE" && \
+           ! grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain\s+.*\bcontrib\b.*\bnon-free\b.*\bnon-free-firmware\b' "$SOURCES_FILE"; then
+
+            print_warning "Main Debian repository might be missing contrib/non-free/non-free-firmware components needed for NVIDIA drivers."
+            print_info "Backing up $SOURCES_FILE to $SOURCES_BACKUP..."
+            # Use sudo for cp/sed as we are root but file permissions might be strict
+            cp "$SOURCES_FILE" "$SOURCES_BACKUP" || { print_error "Failed to backup sources.list. Aborting modification."; exit 1; }
+
+            print_info "Attempting to add contrib non-free non-free-firmware to main Debian repo lines..."
+            # Add components after 'main', preserving anything that might already be there but not all three.
+            # This handles cases like 'main', 'main contrib', 'main non-free', etc.
+            sed -i -E 's/^(deb\s+.*deb\.debian\.org\/debian.*\smain)(\s*[^#]*)$/\1 contrib non-free non-free-firmware\2/' "$SOURCES_FILE"
+
+            # Verify if modification seemed successful by checking again
+            if ! grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain\s+.*\bcontrib\b.*\bnon-free\b.*\bnon-free-firmware\b' "$SOURCES_FILE"; then
+                 print_warning "Automatic modification of sources.list might have failed or components were already partially present in an unexpected format. Please check $SOURCES_FILE manually."
+                 # Don't set MODIFIED_SOURCES=true if the final check fails
+            else
+                 print_success "Added/Ensured contrib non-free non-free-firmware components in sources.list."
+                 MODIFIED_SOURCES=true
+            fi
+        else
+            print_info "Contrib/non-free/non-free-firmware components seem already enabled or main repo line not found/unexpected format."
+        fi
+
+        # Run apt update if sources were modified
+        if [ "$MODIFIED_SOURCES" = true ]; then
+            print_info "Running apt-get update after modifying sources..."
+            apt-get update -q || { print_error "apt-get update failed after modifying sources."; exit 1; }
+        else
+             # Run update anyway before installing packages
+             print_info "Running apt-get update..."
+             apt-get update -q || print_warning "apt-get update failed, continuing anyway..."
+        fi
+    else
+        print_warning "Non-Debian system detected. Skipping automatic APT source modification for NVIDIA drivers."
+        # Run update before attempting install
+        apt-get update -q || print_warning "apt-get update failed, continuing anyway..."
+    fi
+    # --- End Distro Check ---
+
+    # Install nvidia-detect first
+    print_info "Installing nvidia-detect..."
+    apt-get install -y -q nvidia-detect || print_warning "Failed to install nvidia-detect. Will try fallback driver."
+
+    DRIVER_PACKAGE=""
+    if command -v nvidia-detect &> /dev/null; then
+        DETECT_OUTPUT=$(nvidia-detect 2>/dev/null)
+        # Extract recommended package (handles nvidia-driver and nvidia-driver-XXX)
+        DRIVER_PACKAGE=$(echo "$DETECT_OUTPUT" | grep -oP '^\s*\Knvidia-driver(?:-\d+)?')
+        if [ -n "$DRIVER_PACKAGE" ]; then
+            print_info "nvidia-detect recommended package: $DRIVER_PACKAGE"
+        else
+            print_warning "nvidia-detect ran but did not recommend a specific driver package. Falling back to 'nvidia-driver'."
+            DRIVER_PACKAGE="nvidia-driver" # Fallback for Debian
+        fi
+    else
+        print_warning "nvidia-detect not found. Falling back to installing 'nvidia-driver' metapackage."
+        DRIVER_PACKAGE="nvidia-driver" # Fallback for Debian
+    fi
+
+    if [ -n "$DRIVER_PACKAGE" ]; then
+        print_info "Attempting to install $DRIVER_PACKAGE..."
+        # Ensure non-free components are enabled (often needed) - best effort
+        # This might require manual source list editing beforehand if not default
+        apt-get update -q
+        apt-get install -y -q "$DRIVER_PACKAGE"
+        INSTALL_EXIT_CODE=$?
+        if [ $INSTALL_EXIT_CODE -ne 0 ]; then
+            print_error "Failed to install $DRIVER_PACKAGE (Exit code: $INSTALL_EXIT_CODE). Please install NVIDIA drivers manually and re-run."
+            exit 1
+        else
+            print_success "$DRIVER_PACKAGE installed. Checking nvidia-smi again..."
+            # Check again
+            if command -v nvidia-smi &> /dev/null; then
+                print_success "NVIDIA drivers (nvidia-smi) successfully installed and detected."
+                nvidia-smi -L
+                print_warning "A system reboot might be required for drivers to function correctly."
+            else
+                print_error "nvidia-smi not found even after installing $DRIVER_PACKAGE. Manual installation/reboot might be required."
+                exit 1
+            fi
+        fi
+    else
+         print_error "Could not determine NVIDIA driver package to install. Please install manually."
+         exit 1
+    fi
+fi
+
 if ! command -v python3 &> /dev/null; then print_error "python3 not found."; exit 1; fi
 if ! python3 -m venv -h &> /dev/null; then print_error "python3-venv module not found."; exit 1; fi
 print_info "Python 3 and venv found."
