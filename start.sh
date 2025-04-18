@@ -125,7 +125,8 @@ else
         print_info "Attempting to install $DRIVER_PACKAGE..."
         # Ensure non-free components are enabled (often needed) - best effort
         # This might require manual source list editing beforehand if not default
-        apt-get update -q
+        print_info "Running apt-get update again to ensure lists are fresh..." # Add extra update
+        apt-get update -q || print_warning "Second apt-get update failed, install might still fail..."
         apt-get install -y -q "$DRIVER_PACKAGE"
         INSTALL_EXIT_CODE=$?
         if [ $INSTALL_EXIT_CODE -ne 0 ]; then
