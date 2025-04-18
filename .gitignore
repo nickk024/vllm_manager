@@ -9,6 +9,8 @@ __pycache__/
 *.egg
 
 .pytest_cache/
+htmlcov/ # Coverage report directory
+
 # Virtual Environments
 venv/
 frontend_venv/

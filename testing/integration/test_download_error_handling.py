@@ -99,9 +99,12 @@ class TestDownloadErrorHandling:
             log_calls = [call[0][0] for call in mock_logger.info.call_args_list] # Get positional args of calls
             # Correct the expected log message based on the actual code
             assert any("Background download task started for 3 models" in msg for msg in log_calls)
-            assert any("Successfully downloaded model_ok" in msg for msg in log_calls)
-            assert any("Successfully downloaded model_ok_too" in msg for msg in log_calls)
-            # Failure is logged as error
-            mock_logger.error.assert_called_once()
-            assert "Failed to download model_fail" in mock_logger.error.call_args[0][0]
-            assert any("Download task finished. Success: 2, Failed: 1" in msg for msg in log_calls)
+            # Remove assertions for logs inside the mocked _download_single_model
+            # assert any("Successfully downloaded model_ok" in msg for msg in log_calls)
+            # assert any("Successfully downloaded model_ok_too" in msg for msg in log_calls)
+            # Failure is logged as warning by run_download_task
+            mock_logger.warning.assert_called_once()
+            assert "Failed to download: 1/3 models: model_fail" in mock_logger.warning.call_args[0][0]
+            # Check for the final summary log message
+            assert any("Background download task finished." in msg for msg in log_calls)
+            assert any("Successfully downloaded: 2/3" in msg for msg in log_calls) # Check success count log
