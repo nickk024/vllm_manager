@@ -192,12 +192,9 @@ class TestRecoveryScenarios:
             assert len(stats1) == 2
             
             # Second call should return only 1 GPU
-            # We need to force the mock to be used instead of the real implementation
-            with patch('backend.utils.gpu_utils.pynvml') as mock_pynvml:
-                # Force an exception to ensure our mock is used
-                mock_pynvml.nvmlDeviceGetCount.side_effect = Exception("Forced error")
-                stats2 = get_gpu_stats()
-                assert len(stats2) == 1
+            # Just use the mock directly
+            stats2 = get_gpu_stats()
+            assert len(stats2) == 1
             
             # The system should continue to function with the remaining GPU
             assert stats2[0]["index"] == 0

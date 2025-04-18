@@ -55,7 +55,8 @@ class TestNvidiaSpecific:
             
             # Verify tensor_parallel_size was passed correctly
             args, kwargs = mock_build_deployment.call_args
-            assert kwargs.get('tensor_parallel_size') == 2
+            # The tensor_parallel_size is nested inside engine_config
+            assert kwargs.get('engine_config', {}).get('tensor_parallel_size') == 2
     
     def test_cuda_device_detection(self):
         """Test that CUDA devices are correctly detected."""
