@@ -100,8 +100,32 @@ class TestSecurity:
         # Create a fake token
         fake_token = "hf_abcdefghijklmnopqrstuvwxyz123456789"
         
-        # Skip this test as it requires more complex mocking
-        pytest.skip("This test requires more complex mocking of the download process")
+        # Mock the necessary functions
+        with patch('backend.routers.download_router.snapshot_download') as mock_download, \
+             patch('backend.routers.download_router.load_model_config', return_value={"test_model": {"model_id": "org/model"}}), \
+             patch('backend.routers.download_router.logger'):
+            
+            # Configure the mock to return a success
+            mock_download.return_value = "/path/to/downloaded/model"
+            
+            # Test downloading a model with a token
+            response = client.post(
+                "/api/v1/manage/models/download",
+                json={"models": ["test_model"], "token": fake_token}
+            )
+            
+            # Verify the response
+            assert response.status_code == 200
+            
+            # Verify that the token was passed to the download function
+            mock_download.assert_called_once()
+            # Check that the token was passed as an argument
+            args, kwargs = mock_download.call_args
+            assert "token" in kwargs
+            assert kwargs["token"] == fake_token
+            
+            # Verify that the token is not returned in the response
+            assert "token" not in response.json()
 
     def test_xss_prevention(self):
         """Test that XSS attacks are prevented."""

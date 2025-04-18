@@ -5,6 +5,9 @@ import tempfile
 import shutil
 from unittest.mock import patch
 
+# Configure pytest-asyncio
+pytest_plugins = ["pytest_asyncio"]
+
 # Ensure backend is in the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
