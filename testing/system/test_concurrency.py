@@ -69,57 +69,71 @@ class TestConcurrency:
             # Verify that the logger was called for each model
             assert mock_logger.info.call_count >= 3
 
-    def test_ray_serve_status(self):
+    @pytest.mark.asyncio
+    async def test_ray_serve_status(self):
         """Test the Ray Serve status endpoint."""
-        # Mock Ray and Ray Serve
-        with patch('backend.routers.service_router.ray') as mock_ray, \
-             patch('backend.routers.service_router.serve') as mock_serve:
-            
-            # Configure the mocks
-            mock_ray.is_initialized.return_value = True
-            mock_serve.status.return_value = {"status": "RUNNING"}
-            
-            # Call the function
-            status = get_ray_serve_status()
-            
-            # Verify the result
-            assert status["ray_initialized"] is True
-            assert status["serve_running"] is True
-            
-            # Test when Ray is initialized but Serve is not running
-            mock_serve.status.side_effect = Exception("Serve not running")
-            status = get_ray_serve_status()
-            assert status["ray_initialized"] is True
-            assert status["serve_running"] is False
-            
-            # Test when Ray is not initialized
-            mock_ray.is_initialized.return_value = False
-            status = get_ray_serve_status()
-            assert status["ray_initialized"] is False
-            assert status["serve_running"] is False
+        # Mock the specific functions/attributes used within get_ray_serve_status
+        # Note: We patch the imports *where they are used* inside the function
+        with patch('backend.routers.service_router.ray.is_initialized') as mock_is_initialized, \
+             patch('backend.routers.service_router.ray.nodes') as mock_nodes, \
+             patch('backend.routers.service_router.ray.available_resources') as mock_available_resources, \
+             patch('backend.routers.service_router.ray.__version__', "mock_version"), \
+             patch('backend.routers.service_router.serve.api._get_global_client') as mock_get_client, \
+             patch('backend.routers.service_router.get_configured_models_internal', return_value=[]): # Mock model fetching
 
-    def test_concurrent_status_requests(self):
+            # --- Test Case 1: Ray Initialized, Serve Running ---
+            mock_is_initialized.return_value = True
+            mock_nodes.return_value = ["node1"] # Simulate one node
+            mock_available_resources.return_value = {"CPU": 4}
+            mock_get_client.return_value = MagicMock() # Simulate a running client
+            mock_get_client.side_effect = None # Clear any previous side effects
+
+            status = await get_ray_serve_status()
+            assert status.ray_serve_status == "Ray: running, Serve: running"
+            assert status.configured_models == [] # Check it returns models list
+
+            # --- Test Case 2: Ray Initialized, Serve Not Running ---
+            mock_is_initialized.return_value = True
+            mock_get_client.side_effect = Exception("Serve not running") # Simulate client error
+
+            status = await get_ray_serve_status()
+            assert status.ray_serve_status == "Ray: running, Serve: not_running"
+
+            # --- Test Case 3: Ray Not Initialized ---
+            mock_is_initialized.return_value = False
+            mock_get_client.side_effect = None # Reset side effect
+            # No need to set return_value when is_initialized is False, as get_client won't be called
+
+            status = await get_ray_serve_status()
+            assert status.ray_serve_status == "Ray: not_running, Serve: not_running"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_status_requests(self):
         """Test handling of concurrent status requests."""
-        # Mock Ray and Ray Serve
-        with patch('backend.routers.service_router.ray') as mock_ray, \
-             patch('backend.routers.service_router.serve') as mock_serve:
-            
-            # Configure the mocks
-            mock_ray.is_initialized.return_value = True
-            mock_serve.status.return_value = {"status": "RUNNING"}
-            
-            # Function to get status in a thread
-            def get_status():
-                return get_ray_serve_status()
-            
-            # Create a thread pool and submit multiple requests
-            results = []
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                futures = [executor.submit(get_status) for _ in range(10)]
-                for future in futures:
-                    results.append(future.result())
-            
+        # Mock the specific functions/attributes used within get_ray_serve_status
+        with patch('backend.routers.service_router.ray.is_initialized') as mock_is_initialized, \
+             patch('backend.routers.service_router.ray.nodes') as mock_nodes, \
+             patch('backend.routers.service_router.ray.available_resources') as mock_available_resources, \
+             patch('backend.routers.service_router.ray.__version__', "mock_version"), \
+             patch('backend.routers.service_router.serve.api._get_global_client') as mock_get_client, \
+             patch('backend.routers.service_router.get_configured_models_internal', return_value=[]): # Mock model fetching
+
+            # Configure mocks for a running state
+            mock_is_initialized.return_value = True
+            mock_nodes.return_value = ["node1"]
+            mock_available_resources.return_value = {"CPU": 4}
+            mock_get_client.return_value = MagicMock()
+            mock_get_client.side_effect = None # Ensure no side effects interfere
+
+            # Function to get status asynchronously
+            async def get_status_async():
+                return await get_ray_serve_status()
+
+            # Run multiple requests concurrently using asyncio
+            tasks = [get_status_async() for _ in range(10)]
+            results = await asyncio.gather(*tasks)
+
             # Verify all results are consistent
             for result in results:
-                assert result["ray_initialized"] is True
-                assert result["serve_running"] is True
+                assert result.ray_serve_status == "Ray: running, Serve: running"
+                assert result.configured_models == []

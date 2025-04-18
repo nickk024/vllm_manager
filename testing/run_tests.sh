@@ -60,37 +60,13 @@ else
     pip install -r testing/requirements-test.txt
 fi
 
-# Run unit tests
-print_step "Running Unit Tests"
-python -m pytest testing/unit/ -v
-
-# Run integration tests
-print_step "Running Integration Tests"
-python -m pytest testing/integration/ -v
-
-# Run system tests
-print_step "Running System Tests"
-python -m pytest testing/system/ -v
-
-# Run environment-specific tests
-if [[ "$TEST_ENV" == "nvidia_gpu" ]]; then
-    print_step "Running NVIDIA-specific Tests"
-    python -m pytest testing/system/test_nvidia_compat.py -v
-else
-    print_warning "Skipping NVIDIA-specific tests on non-NVIDIA environment"
-fi
-
-# Run stress tests (only in production or with explicit flag)
-if [[ "$TEST_ENV" == "nvidia_gpu" || "$1" == "--with-stress" ]]; then
-    print_step "Running Stress Tests"
-    python -m pytest testing/system/test_stress.py -v
-else
-    print_warning "Skipping stress tests (only run in production or with --with-stress flag)"
-fi
-
 # Run all tests with coverage
+# This single command runs unit, integration, system, and frontend tests
+# It automatically handles environment-specific tests based on markers/fixtures
+# Stress tests are typically marked and can be included/excluded via pytest arguments if needed
 print_step "Running All Tests with Coverage"
-python -m pytest testing/ --cov=backend --cov-report=term --cov-report=html -v
+# Add -v for verbose output, adjust cov targets as needed
+python -m pytest testing/ --cov=backend --cov=frontend --cov-report=term --cov-report=html -v
 
 # Print summary
 print_step "Test Summary"
