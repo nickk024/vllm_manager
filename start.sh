@@ -58,42 +58,30 @@ else
         SOURCES_BACKUP="${SOURCES_FILE}.bak_$(date +%Y%m%d%H%M%S)"
         MODIFIED_SOURCES=false
 
-        # Check if non-free components are already enabled for the main repo lines containing 'main'
-        # We check if *any* relevant line is missing *all* required components
-        if grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain' "$SOURCES_FILE" && \
-           ! grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain\s+.*\bcontrib\b.*\bnon-free\b.*\bnon-free-firmware\b' "$SOURCES_FILE"; then
+        # Always attempt to add non-free components on Debian, just in case check fails
+        print_warning "Ensuring contrib/non-free/non-free-firmware components are enabled..."
+        print_info "Backing up $SOURCES_FILE to $SOURCES_BACKUP..."
+        cp "$SOURCES_FILE" "$SOURCES_BACKUP" || { print_error "Failed to backup sources.list. Aborting modification."; exit 1; }
 
-            print_warning "Main Debian repository might be missing contrib/non-free/non-free-firmware components needed for NVIDIA drivers."
-            print_info "Backing up $SOURCES_FILE to $SOURCES_BACKUP..."
-            # Use sudo for cp/sed as we are root but file permissions might be strict
-            cp "$SOURCES_FILE" "$SOURCES_BACKUP" || { print_error "Failed to backup sources.list. Aborting modification."; exit 1; }
+        print_info "Attempting to add contrib non-free non-free-firmware to main Debian repo lines..."
+        # Add components after 'main', preserving anything that might already be there but not all three.
+        sed -i -E 's/^(deb\s+.*deb\.debian\.org\/debian.*\smain)(\s*[^#]*)$/\1 contrib non-free non-free-firmware\2/' "$SOURCES_FILE"
+        # Add components after 'main' for security lines too
+        sed -i -E 's/^(deb\s+.*security\.debian\.org\/debian-security.*\smain)(\s*[^#]*)$/\1 contrib non-free non-free-firmware\2/' "$SOURCES_FILE"
 
-            print_info "Attempting to add contrib non-free non-free-firmware to main Debian repo lines..."
-            # Add components after 'main', preserving anything that might already be there but not all three.
-            # This handles cases like 'main', 'main contrib', 'main non-free', etc.
-            sed -i -E 's/^(deb\s+.*deb\.debian\.org\/debian.*\smain)(\s*[^#]*)$/\1 contrib non-free non-free-firmware\2/' "$SOURCES_FILE"
-
-            # Verify if modification seemed successful by checking again
-            if ! grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain\s+.*\bcontrib\b.*\bnon-free\b.*\bnon-free-firmware\b' "$SOURCES_FILE"; then
-                 print_warning "Automatic modification of sources.list might have failed or components were already partially present in an unexpected format. Please check $SOURCES_FILE manually."
-                 # Don't set MODIFIED_SOURCES=true if the final check fails
-            else
-                 print_success "Added/Ensured contrib non-free non-free-firmware components in sources.list."
-                 MODIFIED_SOURCES=true
-            fi
+        # Verify if modification seemed successful by checking again
+        if grep -qE '^deb\s+.*deb\.debian\.org/debian.*\smain\s+.*\bcontrib\b.*\bnon-free\b.*\bnon-free-firmware\b' "$SOURCES_FILE"; then
+             print_success "Ensured contrib non-free non-free-firmware components in sources.list."
+             MODIFIED_SOURCES=true # Assume modification happened or was already correct
         else
-            print_info "Contrib/non-free/non-free-firmware components seem already enabled or main repo line not found/unexpected format."
+             print_warning "Automatic modification of sources.list might have failed. Please check $SOURCES_FILE manually."
+             # Continue anyway, maybe it was already correct in a different format
         fi
 
-        # Run apt update if sources were modified
-        if [ "$MODIFIED_SOURCES" = true ]; then
-            print_info "Running apt-get update after modifying sources..."
-            apt-get update -q || { print_error "apt-get update failed after modifying sources."; exit 1; }
-        else
-             # Run update anyway before installing packages
-             print_info "Running apt-get update..."
-             apt-get update -q || print_warning "apt-get update failed, continuing anyway..."
-        fi
+        # Clean apt cache and run update
+        print_info "Cleaning apt cache and running update..."
+        apt-get clean
+        apt-get update -q || { print_error "apt-get update failed after modifying sources."; exit 1; }
     else
         print_warning "Non-Debian system detected. Skipping automatic APT source modification for NVIDIA drivers."
         # Run update before attempting install
@@ -125,8 +113,14 @@ else
         print_info "Attempting to install $DRIVER_PACKAGE..."
         # Ensure non-free components are enabled (often needed) - best effort
         # This might require manual source list editing beforehand if not default
-        print_info "Running apt-get update again to ensure lists are fresh..." # Add extra update
+        print_info "Running apt-get update again to ensure lists are fresh..."
+        apt-get clean # Clean again before final attempt
         apt-get update -q || print_warning "Second apt-get update failed, install might still fail..."
+
+        # --- Debug: Check apt policy before install attempt 1 ---
+        print_info "Checking apt policy for $DRIVER_PACKAGE before install attempt 1..."
+        apt policy "$DRIVER_PACKAGE"
+        # --- End Debug ---
 
         # Attempt 1
         apt-get install -y -q "$DRIVER_PACKAGE"
@@ -137,7 +131,14 @@ else
             print_warning "Initial install attempt failed (Exit code: $INSTALL_EXIT_CODE). Retrying after a short delay..."
             sleep 5
             print_info "Retrying apt-get update..."
+            apt-get clean # Clean before retry update
             apt-get update -q || print_warning "Update before retry failed."
+
+            # --- Debug: Check apt policy before install attempt 2 ---
+            print_info "Checking apt policy for $DRIVER_PACKAGE before install attempt 2..."
+            apt policy "$DRIVER_PACKAGE"
+            # --- End Debug ---
+
             print_info "Retrying install of $DRIVER_PACKAGE..."
             apt-get install -y -q "$DRIVER_PACKAGE"
             INSTALL_EXIT_CODE=$?
