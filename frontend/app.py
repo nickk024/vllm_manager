@@ -142,21 +142,34 @@ def index():
 @app.route('/download/<model_name>', methods=['GET', 'POST'])
 def handle_download_model(model_name: str):
     """Handles download request for a specific *configured* model."""
-    app.logger.info(f"Handling download request for configured model: {model_name}")
+    app.logger.info(f"--- Entered handle_download_model route for model_name: '{model_name}' (Type: {type(model_name)}) ---") # Log entry and type
     if not model_name:
+         app.logger.error("handle_download_model called with empty model_name.")
          flash("No model name provided for download.", "error")
          return redirect(url_for('index'))
-    
+
     # Handle both GET and POST requests
     if request.method == 'POST':
+        app.logger.info(f"Handling POST request for model: {model_name}")
         hf_token = request.form.get('hf_token')
         force_download = request.form.get('force') == 'on'
         payload = {"models": [model_name], "token": hf_token if hf_token else None, "force": force_download}
+        app.logger.info(f"Prepared payload for backend /models/download: {payload}")
         result = call_backend("POST", "/models/download", json_data=payload)
+        app.logger.info(f"Backend call result for /models/download: {result}")
         if result and isinstance(result, dict) and result.get("status") == "ok":
             flash(f"Download task for model '{model_name}' started in background.", "success")
+        else:
+            # Log if backend call failed or returned unexpected status
+            app.logger.warning(f"Backend call for download model '{model_name}' did not return 'ok' status. Result: {result}")
+            # Flash error handled by call_backend helper if it returned None
+            if result: # If backend returned something other than None but not 'ok'
+                 flash(f"Failed to start download for '{model_name}'. Backend response: {result.get('message', 'Unknown error')}", "error")
+
+        app.logger.info(f"Redirecting to index after POST for model: {model_name}")
         return redirect(url_for('index'))
-    else:
+    else: # GET request
+        app.logger.info(f"Handling GET request for model: {model_name}, rendering download form.")
         # For GET requests, show a download form
         return render_template('download.html', model_name=model_name)
 
