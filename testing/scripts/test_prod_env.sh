@@ -57,7 +57,7 @@ source test_venv/bin/activate
 # Install dependencies
 echo -e "${GREEN}=== Installing dependencies ===${NC}"
 pip install -r backend/requirements.txt
-pip install pytest pytest-cov httpx
+pip install -r testing/requirements-test.txt
 
 # Run tests with coverage
 echo -e "${GREEN}=== Running tests with coverage ===${NC}"

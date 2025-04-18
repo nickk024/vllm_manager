@@ -52,7 +52,7 @@ else
     python3 -m venv test_venv
     source test_venv/bin/activate
     pip install -r backend/requirements.txt
-    pip install pytest pytest-cov httpx
+    pip install -r testing/requirements-test.txt
 fi
 
 # Run unit tests

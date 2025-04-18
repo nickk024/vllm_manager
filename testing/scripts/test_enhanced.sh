@@ -90,7 +90,8 @@ else
     python3 -m venv test_venv
     source test_venv/bin/activate
     pip install -r backend/requirements.txt
-    pip install pytest pytest-cov pytest-benchmark httpx
+    pip install -r testing/requirements-test.txt
+    pip install pytest-benchmark
 fi
 
 # Run unit tests
