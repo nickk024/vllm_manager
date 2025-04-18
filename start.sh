@@ -127,13 +127,28 @@ else
         # This might require manual source list editing beforehand if not default
         print_info "Running apt-get update again to ensure lists are fresh..." # Add extra update
         apt-get update -q || print_warning "Second apt-get update failed, install might still fail..."
+
+        # Attempt 1
         apt-get install -y -q "$DRIVER_PACKAGE"
         INSTALL_EXIT_CODE=$?
+
+        # Retry once if failed
         if [ $INSTALL_EXIT_CODE -ne 0 ]; then
-            print_error "Failed to install $DRIVER_PACKAGE (Exit code: $INSTALL_EXIT_CODE). Please install NVIDIA drivers manually and re-run."
+            print_warning "Initial install attempt failed (Exit code: $INSTALL_EXIT_CODE). Retrying after a short delay..."
+            sleep 5
+            print_info "Retrying apt-get update..."
+            apt-get update -q || print_warning "Update before retry failed."
+            print_info "Retrying install of $DRIVER_PACKAGE..."
+            apt-get install -y -q "$DRIVER_PACKAGE"
+            INSTALL_EXIT_CODE=$?
+        fi
+
+        # Check final status
+        if [ $INSTALL_EXIT_CODE -ne 0 ]; then
+            print_error "Failed to install $DRIVER_PACKAGE even after retry (Exit code: $INSTALL_EXIT_CODE). Please install NVIDIA drivers manually and re-run."
             exit 1
         else
-            print_success "$DRIVER_PACKAGE installed. Checking nvidia-smi again..."
+            print_success "$DRIVER_PACKAGE installed successfully. Checking nvidia-smi again..."
             # Check again
             if command -v nvidia-smi &> /dev/null; then
                 print_success "NVIDIA drivers (nvidia-smi) successfully installed and detected."
