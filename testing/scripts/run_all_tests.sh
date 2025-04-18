@@ -52,60 +52,61 @@ else
     python3 -m venv test_venv
     source test_venv/bin/activate
     pip install -r backend/requirements.txt
-    pip install pytest pytest-cov httpx
+    # Install/reinstall test dependencies including pytest-asyncio for async tests
+    pip install --force-reinstall --no-cache-dir pytest pytest-cov httpx pytest-asyncio
 fi
 
 # Run basic tests first
 print_step "Running Basic Tests"
-python -m pytest backend/tests/test_config.py backend/tests/test_logging.py -v
+python -m pytest testing/unit/test_config.py testing/unit/test_logging.py -v
 
 # Run API tests
 print_step "Running API Tests"
-python -m pytest backend/tests/test_api.py -v
+python -m pytest testing/integration/test_api.py -v
 
 # Run utility tests
 print_step "Running Utility Tests"
-python -m pytest backend/tests/test_system_utils.py backend/tests/test_gpu_utils.py backend/tests/test_hf_utils.py -v
+python -m pytest testing/unit/test_system_utils.py testing/unit/test_gpu_utils.py testing/unit/test_hf_utils.py -v
 
 # Run deployment tests
 print_step "Running Deployment Tests"
-python -m pytest backend/tests/test_ray_deployments.py -v
+python -m pytest testing/integration/test_ray_deployments.py -v
 
 # Run environment-specific tests
 if [[ "$TEST_ENV" == "nvidia_gpu" ]]; then
     print_step "Running NVIDIA-specific Tests"
-    python -m pytest backend/tests/test_nvidia_compat.py -v
+    python -m pytest testing/system/test_nvidia_compat.py testing/system/test_nvidia_specific.py -v # Added specific test
 else
     print_warning "Skipping NVIDIA-specific tests on non-NVIDIA environment"
 fi
 
 # Run error handling tests
 print_step "Running Error Handling Tests"
-python -m pytest backend/tests/test_download_error_handling.py -v
+python -m pytest testing/integration/test_download_error_handling.py -v
 
 # Run concurrency tests
 print_step "Running Concurrency Tests"
-python -m pytest backend/tests/test_concurrency.py -v
+python -m pytest testing/system/test_concurrency.py -v
 
 # Run memory management tests
 print_step "Running Memory Management Tests"
-python -m pytest backend/tests/test_memory_management.py -v
+python -m pytest testing/system/test_memory_management.py -v
 
 # Run security tests
 print_step "Running Security Tests"
-python -m pytest backend/tests/test_security.py -v
+python -m pytest testing/integration/test_security.py -v
 
 # Run stress tests (only in production or with explicit flag)
 if [[ "$TEST_ENV" == "nvidia_gpu" || "$1" == "--with-stress" ]]; then
     print_step "Running Stress Tests"
-    python -m pytest backend/tests/test_stress.py -v
+    python -m pytest testing/system/test_stress.py -v
 else
     print_warning "Skipping stress tests (only run in production or with --with-stress flag)"
 fi
 
 # Run all tests with coverage
 print_step "Running All Tests with Coverage"
-python -m pytest backend/tests/ --cov=backend --cov-report=term --cov-report=html -v
+python -m pytest testing/ --cov=backend --cov-report=term --cov-report=html -v # Point to the main testing directory
 
 # Print summary
 print_step "Test Summary"
