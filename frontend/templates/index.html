@@ -12,12 +12,13 @@
         table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
         th, td { padding: 8px 10px; border: 1px solid #ddd; text-align: left; vertical-align: top; }
         th { background-color: #f2f2f2; }
-        .status-active { color: green; font-weight: bold; }
-        .status-inactive { color: red; font-weight: bold; }
-        .status-failed { color: orange; font-weight: bold; } /* Added failed status */
+        .status-active, .status-running, .status-healthy { color: green; font-weight: bold; }
+        .status-inactive, .status-not_running, .status-unhealthy, .status-failed, .status-error { color: red; font-weight: bold; }
+        .status-starting, .status-updating, .status-queued, .status-downloading { color: orange; font-weight: bold; }
+        .status-unknown { color: dimgray; }
         .status-enabled { color: darkcyan; }
         .status-disabled { color: grey; }
-        .status-downloaded { color: green; }
+        .status-downloaded, .status-completed, .status-skipped { color: green; }
         .status-not-downloaded { color: orange; }
         .status-serving { color: green; }
         .status-not-serving { color: grey; }
@@ -27,24 +28,24 @@
         .action-button-info { background-color: #5bc0de; }
         .action-button-add { background-color: #777; }
         .action-button-toggle { background-color: #777; }
-        /* Removed activate style */
         .action-button:hover { opacity: 0.9; }
         .action-button:disabled { background-color: #ccc; cursor: not-allowed; opacity: 0.6; }
         .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
         .flash-success { background-color: #dff0d8; color: #3c763d; border: 1px solid #d6e9c6; }
         .flash-error { background-color: #f2dede; color: #a94442; border: 1px solid #ebccd1; }
         .flash-warning { background-color: #fcf8e3; color: #8a6d3b; border: 1px solid #faebcc; }
+        .flash-info { background-color: #d9edf7; color: #31708f; border: 1px solid #bce8f1;}
         .monitoring-section { background-color: #eef; padding: 15px; border-radius: 5px; margin-top: 20px; }
         .monitoring-section h3 { margin-top: 0; border-bottom: none; }
         .gpu-stats { margin-bottom: 10px; }
         .system-stats { margin-top: 10px; }
         pre { background-color: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; }
-        /* Removed active-model style */
         .fits-vram { color: green; }
         .no-fit-vram { color: #aaa; }
         .model-id-code { font-family: monospace; font-size: 0.9em; color: #555; word-break: break-all; }
         .note { font-size: 0.9em; color: #777; }
         .restart-note { margin-top: 10px; padding: 10px; background-color: #fff8dc; border: 1px solid #fafaae; border-radius: 4px; }
+        #sse-error-message { color: red; font-weight: bold; margin-bottom: 10px; padding: 10px; background-color: #fdd; border: 1px solid #fbb; border-radius: 4px;}
     </style>
 </head>
 <body>
@@ -59,15 +60,59 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
+        <div id="sse-error-message" style="display:none;"></div>
 
-        <!-- Service Status and Control -->
         <!-- Ray Serve Status -->
         <h2>Ray Serve Status</h2>
         <p>
-            <strong>Status:</strong>
-            <span class="status-{{ service_status }}">
-                {{ service_status | capitalize }}
+            <strong>Overall Status:</strong>
+            <span class="status-{{ ray_status_summary.split(',')[1].split(':')[1].strip() | lower if ray_status_summary and 'Serve:' in ray_status_summary and ray_status_summary.split(',')[1].split(':')[1] else 'unknown' }}">
+                {{ ray_status_summary | capitalize }}
             </span>
+        </p>
+        {% if ray_deployment_details %}
+            <h4>Individual Deployments:</h4>
+            <table id="ray_deployments_table">
+                <thead>
+                    <tr>
+                        <th>Deployment Name</th>
+                        <th>Status</th>
+                        <th>Replicas</th>
+                        <th>Message</th>
+                        <th>Application</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for deployment in ray_deployment_details %}
+                    <tr>
+                        <td>{{ deployment.name }}</td>
+                        <td>
+                            <span class="status-{{ deployment.status | lower if deployment.status else 'unknown' }}">
+                                {{ deployment.status }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if deployment.replica_states %}
+                                {% for state, count in deployment.replica_states.items() %}
+                                    {{ state }}: {{ count }}<br>
+                                {% endfor %}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </td>
+                        <td>{{ deployment.message if deployment.message else 'N/A' }}</td>
+                        <td>{{ deployment.application_name if deployment.application_name else 'default' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% elif ray_status_summary and 'running' in ray_status_summary.lower() %}
+            <p>No specific deployment details available, but Ray Serve appears to be running.</p>
+        {% else %}
+            <p>Ray Serve deployment details not available or Ray Serve is not running.</p>
+        {% endif %}
+        <p class="note">
+            <a href="http://localhost:8265" target="_blank" rel="noopener noreferrer">Open Ray Dashboard</a> (if running locally and port 8265 is forwarded)
         </p>
 
         <!-- Configured Models -->
@@ -78,45 +123,54 @@
                     <tr>
                         <th>Name (Config Key)</th>
                         <th>Model ID</th>
-                        <th>Downloaded</th>
+                        <th>Download Status</th>
                         <th>Serve Status</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for model in models %}
-                    <tr>
-                        <td>{{ model.config_key }}</td>
+                    <tr id="model-row-{{ model.name }}">
+                        <td>{{ model.name }}</td>
                         <td class="model-id-code">{{ model.model_id }}</td>
-                        <td>
-                            <span class="status-{{ 'downloaded' if model.downloaded else 'not-downloaded' }}">
+                        <td class="download-status-cell">
+                            <span class="status-{{ 'downloaded' if model.downloaded else 'not-downloaded' }} download-status-text-{{ model.name }}">
                                 {{ 'Yes' if model.downloaded else 'No' }}
                             </span>
+                            <small class="download-message-{{ model.name }}" style="display: block; color: gray; font-style: italic;"></small>
                         </td>
-                        <td>
-                             <span class="status-{{ 'serving' if model.serve_status else 'not-serving' }}">
-                                {{ 'Serving' if model.serve_status else 'Not Serving' }}
+                        <td class="status-serve">
+                             <span class="status-{{ 'serving' if model.serve else 'not-serving' }}">
+                                {{ 'Serving' if model.serve else 'Not Serving' }}
                             </span>
                         </td>
-                        <td>
-                            {% if not model.downloaded %}
-                            <form action="{{ url_for('handle_download_model', model_name=model.config_key) }}" method="post" style="display: inline;">
-                                <button type="submit" class="action-button action-button-info">Download</button>
+                        <td class="actions">
+                            <form action="{{ url_for('handle_download_model', model_name=model.name) }}" method="post" style="display: inline;" class="download-form-{{ model.name }}">
+                                <button type="submit" class="action-button action-button-info download-button-{{ model.name }}" {% if model.downloaded %}disabled{% endif %}>
+                                    {{ 'Downloaded' if model.downloaded else 'Download' }}
+                                </button>
                             </form>
-                            {% else %}
-                                <!-- Toggle Serve Button -->
-                                <form action="{{ url_for('handle_toggle_serve', model_key=model.config_key) }}" method="post" style="display: inline;">
-                                    {% if model.serve_status %}
-                                        <input type="hidden" name="serve_action" value="false">
-                                        <button type="submit" class="action-button action-button-warning">Stop Serving</button>
-                                    {% else %}
-                                         <input type="hidden" name="serve_action" value="true">
-                                        <button type="submit" class="action-button action-button-toggle">Start Serving</button>
-                                    {% endif %}
+                            
+                            {% if model.downloaded %}
+                            <form action="{{ url_for('handle_toggle_serve', model_key=model.name) }}" method="post" style="display: inline;" class="serve-form-{{ model.name }}">
+                                {% if model.serve %}
+                                    <input type="hidden" name="serve_action" value="false">
+                                    <button type="submit" class="action-button action-button-warning serve-button-{{ model.name }}">Stop Serving (Redeploy)</button>
                                 </form>
+                                <form action="{{ url_for('handle_force_unload_model', model_key=model.name) }}" method="post" style="display: inline;" onsubmit="return confirm('Are you sure you want to force unload {{ model.name }}? This will stop the model in Ray Serve and mark it as not serving in the config.');">
+                                    <button type="submit" class="action-button action-button-danger">Force Unload</button>
+                                </form>
+                                {% else %}
+                                    <input type="hidden" name="serve_action" value="true">
+                                    <button type="submit" class="action-button action-button-toggle serve-button-{{ model.name }}">Start Serving (Redeploy)</button>
+                                </form>
+                                {% endif %}
+                            {% else %}
+                                <button class="action-button action-button-toggle serve-button-{{ model.name }}" disabled title="Download model first">Start Serving</button>
                             {% endif %}
-                            <!-- Removed Activate Button -->
-                            <!-- Add Delete from Config button? -->
+                            <form action="{{ url_for('handle_remove_model', model_key=model.name) }}" method="post" style="display: inline;" onsubmit="return confirm('Are you sure you want to remove {{ model.name }} from the configuration? This action cannot be undone and will require a redeploy if the model is active.');">
+                                <button type="submit" class="action-button action-button-danger">Remove Config</button>
+                            </form>
                         </td>
                     </tr>
                     {% endfor %}
@@ -151,7 +205,6 @@
                             {% if already_configured %}
                                 <button class="action-button action-button-add" disabled title="Model already in configuration">Configured</button>
                             {% else %}
-                                <!-- Changed button text and action URL -->
                                 <form action="{{ url_for('handle_add_model', model_id=model.model_id) }}" method="post" style="display: inline;">
                                     <button type="submit" class="action-button action-button-add">Add to Config</button>
                                 </form>
@@ -205,7 +258,150 @@
         {% else %}
             <p>Could not retrieve monitoring stats from the backend.</p>
         {% endif %}
-
     </div>
+
+    <script>
+        function updateModelStatusUI(modelKey, statusInfo) {
+            const modelRow = document.getElementById(`model-row-${modelKey}`);
+            if (!modelRow) {
+                console.warn(`Row for model ${modelKey} not found.`);
+                return;
+            }
+
+            const downloadStatusTextSpan = modelRow.querySelector(`.download-status-text-${modelKey}`);
+            const downloadMessageSmall = modelRow.querySelector(`.download-message-${modelKey}`);
+            const actionsCell = modelRow.querySelector(".actions");
+            
+            if (!actionsCell) {
+                console.warn(`Actions cell for model ${modelKey} not found.`);
+                return;
+            }
+
+            const downloadButton = actionsCell.querySelector(`.download-button-${modelKey}`);
+            const serveButton = actionsCell.querySelector(`.serve-button-${modelKey}`);
+            const downloadForm = actionsCell.querySelector(`.download-form-${modelKey}`); // Get the form
+
+            // Update Download Status Text and Message
+            if (downloadStatusTextSpan) {
+                let statusText = statusInfo.status ? statusInfo.status.charAt(0).toUpperCase() + statusInfo.status.slice(1) : 'Unknown';
+                let statusClass = `status-${statusInfo.status || 'unknown'}`; // e.g., status-downloading
+
+                if (statusInfo.status === "completed" || statusInfo.status === "skipped") {
+                    downloadStatusTextSpan.textContent = 'Yes';
+                    statusClass = 'status-downloaded'; // General class for 'Yes'
+                } else {
+                    downloadStatusTextSpan.textContent = statusText;
+                }
+                // Apply specific status class for more granular styling if needed
+                downloadStatusTextSpan.className = `download-status-text-${modelKey} ${statusClass}`;
+            }
+
+            if (downloadMessageSmall) {
+                downloadMessageSmall.textContent = statusInfo.message || '';
+                downloadMessageSmall.style.display = statusInfo.message ? 'block' : 'none';
+            }
+
+            // Update Download Button and Form visibility
+            if (downloadButton && downloadForm) {
+                if (statusInfo.status === "downloading" || statusInfo.status === "queued") {
+                    downloadButton.disabled = true;
+                    downloadButton.textContent = statusInfo.status === "downloading" ? "Downloading..." : "Queued...";
+                    downloadForm.style.display = 'inline-block'; 
+                } else if (statusInfo.status === "completed" || statusInfo.status === "skipped") {
+                    downloadButton.textContent = "Downloaded";
+                    downloadButton.disabled = true;
+                    downloadForm.style.display = 'none'; // Hide form once download is done or skipped
+                } else if (statusInfo.status === "failed") {
+                    downloadButton.textContent = "Download Failed (Retry)";
+                    downloadButton.disabled = false;
+                    downloadForm.style.display = 'inline-block';
+                } else { // Default state (e.g. not downloaded initially, or after a page load before SSE)
+                    // This part is mostly handled by Jinja on initial load.
+                    // SSE will update it if the status changes from the initial render.
+                    // If model.downloaded is false, Jinja renders the Download button.
+                    // If model.downloaded is true, Jinja renders Downloaded (disabled).
+                }
+            }
+            
+            // Update Serve Button State
+            if (serveButton) {
+                const isDownloaded = (statusInfo.status === "completed" || statusInfo.status === "skipped");
+                // Also check the initial model.downloaded state from Jinja for robustness on page load
+                const initiallyDownloaded = modelRow.dataset.initiallyDownloaded === 'true';
+
+                if (isDownloaded || initiallyDownloaded) {
+                    serveButton.disabled = false;
+                    serveButton.title = ""; 
+                } else if (statusInfo.status === "downloading" || statusInfo.status === "queued" || statusInfo.status === "failed") { 
+                    serveButton.disabled = true;
+                    serveButton.title = "Model not ready or download failed";
+                } else { // Not downloaded, not downloading, not queued, not failed -> should be disabled
+                    serveButton.disabled = true;
+                    serveButton.title = "Download model first";
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // Store initial downloaded state for serve button logic
+            document.querySelectorAll('tr[id^="model-row-"]').forEach(row => {
+                const downloadStatusSpan = row.querySelector('.downloaded-display > span');
+                if (downloadStatusSpan && downloadStatusSpan.textContent.trim() === 'Yes') {
+                    row.dataset.initiallyDownloaded = 'true';
+                } else {
+                    row.dataset.initiallyDownloaded = 'false';
+                }
+            });
+
+
+            const ssePath = "{{ url_for('download_router.stream_download_status', _external=True) }}";
+            console.log("Attempting to connect to SSE endpoint:", ssePath);
+            const eventSource = new EventSource(ssePath);
+            
+            eventSource.onopen = function() {
+                console.log("SSE Connection Opened.");
+                const errorDiv = document.getElementById('sse-error-message');
+                if (errorDiv) errorDiv.style.display = 'none'; // Hide error on successful open
+            };
+
+            eventSource.onmessage = function(event) {
+                console.log("SSE message received:", event.data);
+                try {
+                    const statuses = JSON.parse(event.data);
+                    if (statuses.error) {
+                        console.error("SSE Error:", statuses.error, statuses.detail);
+                        const errorDiv = document.getElementById('sse-error-message');
+                        if (errorDiv) {
+                            errorDiv.textContent = `SSE Error: ${statuses.detail || statuses.error}`;
+                            errorDiv.style.display = 'block';
+                        }
+                        return;
+                    }
+                    
+                    // Clear general SSE error if message is not an error and div exists
+                    const errorDiv = document.getElementById('sse-error-message');
+                    if (errorDiv && !statuses.error) errorDiv.style.display = 'none';
+
+                    for (const modelKey in statuses) {
+                        if (statuses.hasOwnProperty(modelKey)) {
+                            updateModelStatusUI(modelKey, statuses[modelKey]);
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error parsing SSE data:", e, "Raw data:", event.data);
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error("EventSource failed:", err);
+                const errorDiv = document.getElementById('sse-error-message');
+                if (errorDiv) {
+                    errorDiv.textContent = "Connection to status updates lost. Please refresh the page to reconnect.";
+                    errorDiv.style.display = 'block';
+                }
+                // eventSource.close(); // Consider closing to prevent excessive retries if server is down
+            };
+        });
+    </script>
 </body>
 </html>

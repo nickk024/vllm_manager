@@ -88,17 +88,18 @@ def index():
     """Dashboard showing status, models, popular models, and monitoring."""
     app.logger.info("Accessing index route '/'")
     # Use management API endpoints
-    status_data = call_backend("GET", "/service/status")
+    status_data = call_backend("GET", "/service/status") # General status
+    ray_deployments_data = call_backend("GET", "/service/ray/deployments") # Detailed deployment status
     monitoring_data = call_backend("GET", "/monitoring/stats")
     popular_models_data = call_backend("GET", "/models/popular") # Still uses management prefix
 
-    service_status = "Error Fetching"; service_enabled = "Error Fetching"
+    service_status = "Error Fetching"; ray_status_summary = "Error Fetching" # Renamed service_enabled for clarity
     models = []; stats = None; popular_models = []
+    ray_deployment_details = [] # For the new detailed status
     total_vram_gb = 0.0
 
-    if isinstance(status_data, dict):
-        service_status = status_data.get("service_status", "Unknown")
-        service_enabled = status_data.get("service_enabled", "Unknown")
+    if isinstance(status_data, dict): # This is for the ConfiguredModelStatus
+        ray_status_summary = status_data.get("ray_serve_status", "Unknown") # Use the combined Ray/Serve status string
         models = status_data.get("configured_models", []) # This list now has ConfiguredModelInfo structure
     else: app.logger.warning("Failed to fetch service status from backend.")
 
@@ -114,25 +115,33 @@ def index():
 
     popular_params = {}
     if total_vram_gb > 0: popular_params["available_vram_gb"] = round(total_vram_gb, 2)
+    # The /models/popular endpoint is already under /api/v1/manage, so just /models/popular
     popular_models_response = call_backend("GET", "/models/popular", params=popular_params)
 
     if isinstance(popular_models_response, list):
         popular_models = popular_models_response
         app.logger.info(f"Successfully fetched {len(popular_models)} popular models.")
+    
+    if isinstance(ray_deployments_data, list):
+        ray_deployment_details = ray_deployments_data
+        app.logger.info(f"Successfully fetched {len(ray_deployment_details)} Ray Serve deployment details.")
+    elif ray_deployments_data is not None: # It might be a dict if there was an error from backend
+        app.logger.warning(f"Failed to fetch Ray Serve deployment details or received unexpected format: {ray_deployments_data}")
+        flash(f"Could not load Ray Serve deployment details: {ray_deployments_data.get('detail', 'Unknown error')}", "warning")
     else: app.logger.warning("Failed to fetch popular models from backend or received unexpected format.")
 
     configured_model_ids = {m.get('model_id') for m in models}
 
     return render_template('index.html',
-                           service_status=service_status,
-                           service_enabled=service_enabled,
-                           # active_model_key removed
-                           models=models, # List of ConfiguredModelInfo
+                           ray_status_summary=ray_status_summary, # Renamed from service_status
+                           # service_enabled removed as it's part of ray_status_summary or detailed_deployments
+                           models=models, # List of ModelInfo from ConfiguredModelStatus
                            popular_models=popular_models,
                            total_vram_gb=total_vram_gb,
                            configured_model_ids=configured_model_ids,
                            monitoring_stats=stats,
-                           config_path="model_config.json" # Still relevant for user info
+                           ray_deployment_details=ray_deployment_details, # Pass new data to template
+                           config_path="model_config.json"
                            )
 
 # Systemd service action route removed. Ray Serve is managed automatically.
@@ -207,7 +216,7 @@ def handle_toggle_serve(model_key: str):
     serve_bool = serve_action.lower() == 'true'
 
     payload = {"serve": serve_bool}
-    result = call_backend("PUT", f"/config/models/{model_key}/serve", json_data=payload)
+    result = call_backend("PUT", f"/config/models/{model_key}/serve", json_data=payload) # This endpoint in models_router.py handles redeploy
 
     if result and isinstance(result, dict) and result.get("status") == "ok":
         flash(result.get('message', f"Serve status for '{model_key}' updated. Ray Serve redeployed."), "success")
@@ -226,3 +235,46 @@ if __name__ == '__main__':
     app.logger.info(f"Flask frontend starting...")
     app.logger.info(f"Connecting to backend API at: {BACKEND_API_URL}")
     app.run(host='0.0.0.0', port=5000, debug=True)
+
+@app.route('/remove_model/<model_key>', methods=['POST'])
+def handle_remove_model(model_key: str):
+    """Handles request to remove a model from the configuration."""
+    app.logger.info(f"Handling request to remove model key: {model_key}")
+    if not model_key:
+         flash("No model key provided for removal.", "error")
+         return redirect(url_for('index'))
+
+    # Call the backend DELETE endpoint
+    result = call_backend("DELETE", f"/config/models/{model_key}")
+
+    if result and isinstance(result, dict):
+        if result.get("status") == "ok":
+            flash(result.get('message', f"Model '{model_key}' successfully removed from configuration."), "success")
+        elif result.get("status") == "partial_error":
+            flash(result.get('message', f"Model '{model_key}' removed from config, but Ray Serve redeploy failed. Please check logs."), "warning")
+        else: # other errors
+            flash(f"Failed to remove model '{model_key}'. Backend response: {result.get('message', 'Unknown error')}", "error")
+    # If call_backend returned None, it already flashed a connection error
+    return redirect(url_for('index'))
+
+@app.route('/force_unload/<model_key>', methods=['POST'])
+def handle_force_unload_model(model_key: str):
+    """Handles request to forcefully unload a model from Ray Serve."""
+    app.logger.info(f"Handling request to force unload model key: {model_key}")
+    if not model_key:
+         flash("No model key provided for force unload.", "error")
+         return redirect(url_for('index'))
+
+    # Call the new backend endpoint for unloading
+    # The endpoint is /api/v1/manage/service/models/{model_key}/unload
+    result = call_backend("POST", f"/service/models/{model_key}/unload") # No JSON payload needed for this POST
+
+    if result and isinstance(result, dict):
+        if result.get("status") == "ok":
+            flash(result.get('message', f"Model '{model_key}' successfully unloaded from Ray Serve."), "success")
+        elif result.get("status") == "skipped":
+            flash(result.get('message', f"Model '{model_key}' was not actively running or already unloaded."), "info")
+        else:
+            flash(f"Failed to unload model '{model_key}'. Backend response: {result.get('message', 'Unknown error')}", "error")
+    # If call_backend returned None, it already flashed an error
+    return redirect(url_for('index'))

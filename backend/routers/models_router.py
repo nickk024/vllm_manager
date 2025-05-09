@@ -88,7 +88,7 @@ async def add_model_to_config(req: AddModelRequest):
     current_config = load_model_config()
     added_models_info = {}
     skipped_count = 0
-    gpu_count = get_gpu_count()
+    gpu_count = get_gpu_count() # Fetch GPU count once
 
     for model_id_to_add in req.model_ids:
         existing_key = next((key for key, conf in current_config.items() if isinstance(conf, dict) and conf.get("model_id") == model_id_to_add), None)
@@ -104,10 +104,26 @@ async def add_model_to_config(req: AddModelRequest):
             config_key = f"{original_config_key}_{counter}"
             counter += 1
 
-        tensor_parallel_size = 1
-        if gpu_count > 1:
-             if any(s in model_id_to_add.lower() for s in ['70b', '65b', '40b', '34b', '32b']):
-                  tensor_parallel_size = min(2, gpu_count)
+        # Determine tensor_parallel_size based on gpu_count and model size
+        tensor_parallel_size = 1 # Default for smaller models or single GPU
+        if gpu_count == 3:
+            # For 3 GPUs, use TP=3 for very large models.
+            if any(s in model_id_to_add.lower() for s in ['70b', '65b', '40b', '34b', '32b']): # Keywords for large models
+                tensor_parallel_size = 3
+            elif any(s in model_id_to_add.lower() for s in ['13b', '20b']): # Example for medium models
+                 tensor_parallel_size = 2 # Or keep 1 if preferred to run more models concurrently
+            # else TP remains 1 for smaller models
+        elif gpu_count == 2:
+            # For 2 GPUs, use TP=2 for large/medium models
+            if any(s in model_id_to_add.lower() for s in ['70b', '65b', '40b', '34b', '32b', '13b', '20b']):
+                tensor_parallel_size = 2
+        elif gpu_count >= 4: # Example for 4+ GPUs, could use TP=4 for very large models
+            if any(s in model_id_to_add.lower() for s in ['70b', '65b']):
+                tensor_parallel_size = min(4, gpu_count) # Use up to 4, or all if more
+            elif any(s in model_id_to_add.lower() for s in ['40b', '34b', '32b']):
+                tensor_parallel_size = min(2, gpu_count) # TP=2 for these on 4+ GPUs
+        # For gpu_count == 1, TP remains 1.
+        # This logic prioritizes utilizing available GPUs for larger models.
 
         # Add serve: false by default
         new_config_entry = {
@@ -191,3 +207,71 @@ async def toggle_model_serve_status(
         )
 
 # TODO: Add endpoint to REMOVE a model from config? DELETE /config/models/{model_key}
+
+@router.delete("/config/models/{model_key}", response_model=GeneralResponse, summary="Remove Model from Configuration")
+async def remove_model_from_config(
+    model_key: str = Path(..., description="The configuration key of the model to remove.")
+):
+    """
+    Removes a model entry from the model_config.json file.
+    If the model is currently marked as 'serve: true', its status will be set to 'serve: false'
+    and a Ray Serve redeployment will be triggered to unload it.
+    This does not delete the downloaded model files from disk.
+    """
+    logger.info(f"Request to remove model '{model_key}' from configuration.")
+    current_config = load_model_config()
+
+    if model_key not in current_config:
+        logger.warning(f"Model key '{model_key}' not found in configuration. Cannot remove.")
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail=f"Model key '{model_key}' not found in configuration.")
+
+    model_data = current_config.get(model_key, {})
+    was_serving = False
+    if isinstance(model_data, dict) and model_data.get("serve", False):
+        logger.info(f"Model '{model_key}' is currently marked as 'serve: true'. It will be unserved before removal from config.")
+        current_config[model_key]["serve"] = False # Mark as not serving
+        was_serving = True
+        # Note: We will save the config after deletion, then redeploy if it was serving.
+
+    del current_config[model_key]
+    save_model_config(current_config)
+    logger.info(f"Model '{model_key}' removed from configuration file.")
+
+    if was_serving:
+        logger.info(f"Model '{model_key}' was serving. Triggering Ray Serve redeployment to unload it.")
+        try:
+            import ray
+            from ray import serve
+            if not ray.is_initialized():
+                # This case should ideally not happen if the app is running, but as a safeguard:
+                logger.warning("Ray not initialized during model removal. Assuming local setup for re-init.")
+                ray.init(address="auto", namespace="serve", ignore_reinit_error=True)
+            
+            # Re-build deployments based on the *new* config (where the model is now removed or serve=false)
+            # The build_llm_deployments function will naturally exclude the removed model or models with serve=false
+            llm_deployments = build_llm_deployments(current_config) # current_config is now without the deleted model
+            
+            serve.run(
+                llm_deployments if llm_deployments else {}, # Pass empty dict if no models left to serve
+                host="0.0.0.0",
+                port=8000,
+                blocking=False
+            )
+            logger.info(f"Ray Serve redeployment triggered to reflect removal/unserving of '{model_key}'.")
+            return GeneralResponse(
+                status="ok",
+                message=f"Model '{model_key}' removed from config and Ray Serve redeployed to unload it."
+            )
+        except Exception as e:
+            logger.error(f"Model '{model_key}' removed from config, but failed to redeploy Ray Serve: {e}", exc_info=True)
+            # The model is removed from config, but might still be running in Serve if redeploy failed.
+            # This is a potentially inconsistent state.
+            return GeneralResponse(
+                status="partial_error",
+                message=f"Model '{model_key}' removed from config, but Ray Serve redeploy failed: {str(e)}. Manual check of Ray Serve may be needed."
+            )
+            
+    return GeneralResponse(
+        status="ok",
+        message=f"Model '{model_key}' successfully removed from configuration."
+    )
